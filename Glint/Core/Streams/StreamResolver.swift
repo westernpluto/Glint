@@ -186,7 +186,7 @@ final class StreamResolver: @unchecked Sendable {
                 trace?("\(client.key)\(client.isWebPlayback && signedIn ? " (signed in)" : ""): \(json.at("playabilityStatus.status").string ?? "?") \(reason ?? "")")
                 continue
             }
-            if let webPlayer { json = await prepareWebFormats(json, client: client, player: webPlayer) }
+            if let webPlayer { json = await prepareWebFormats(json, client: client, player: webPlayer, videoToken: playerToken) }
             guard var stream = await build(json, client: client) else {
                 if client.isWebPlayback { answeredWithoutLinks = true }
                 trace?("\(client.key): no usable formats")
@@ -249,7 +249,7 @@ final class StreamResolver: @unchecked Sendable {
 
     /// Fetches each variant's and audio track's playlist and the first bytes of its first
     /// segment; drops what YouTube refuses (and variants whose audio group lost every track).
-    private func validated(_ m: HLSManifest, client: ClientProfile) async -> HLSManifest {
+    private func validated(_ m: HLSManifest, client: ClientProfile, label: String) async -> HLSManifest {
         let ua = client.userAgent
         let variants = m.variants.filter { codecSupported($0.videoCodec) }
         let media = m.headerLines.enumerated().compactMap { i, line -> (Int, URL)? in
@@ -258,15 +258,17 @@ final class StreamResolver: @unchecked Sendable {
             return (i, url)
         }
         var variantOK: [Int: Bool] = [:], mediaOK: [Int: Bool] = [:]
-        await withTaskGroup(of: (Bool, Int, Bool).self) { group in
+        var refusals: [String: Int] = [:]   // "playlist 403" → count
+        await withTaskGroup(of: (Bool, Int, String?).self) { group in
             for (i, v) in variants.enumerated() {
-                group.addTask { (true, i, await self.hlsPlaylistServes(v.uri, userAgent: ua)) }
+                group.addTask { (true, i, await self.hlsRefusal(v.uri, userAgent: ua)) }
             }
             for (i, url) in media {
-                group.addTask { (false, i, await self.hlsPlaylistServes(url, userAgent: ua)) }
+                group.addTask { (false, i, await self.hlsRefusal(url, userAgent: ua)) }
             }
-            for await (isVariant, i, ok) in group {
-                if isVariant { variantOK[i] = ok } else { mediaOK[i] = ok }
+            for await (isVariant, i, refusal) in group {
+                if isVariant { variantOK[i] = refusal == nil } else { mediaOK[i] = refusal == nil }
+                if let refusal { refusals[refusal, default: 0] += 1 }
             }
         }
 
@@ -280,24 +282,25 @@ final class StreamResolver: @unchecked Sendable {
             guard let g = HLSManifest.attributes(v.attributes)["AUDIO"], allGroups.contains(g) else { return true }
             return liveGroups.contains(g)
         }.map { $0.element }
-        trace?("\(client.key): HLS check \(out.variants.count)/\(variants.count) qualities, \(mediaOK.values.filter { $0 }.count)/\(media.count) audio tracks served")
+        let why = refusals.sorted { $0.key < $1.key }.map { "\($0.value)× \($0.key)" }.joined(separator: ", ")
+        trace?("\(client.key): HLS check (\(label)) \(out.variants.count)/\(variants.count) qualities, \(mediaOK.values.filter { $0 }.count)/\(media.count) audio tracks served\(why.isEmpty ? "" : "; refused: " + why)")
         return out
     }
 
-    /// The playlist loads and its first segment answers (network trouble counts as fine,
-    /// only a refusal fails).
-    private func hlsPlaylistServes(_ url: URL, userAgent: String) async -> Bool {
+    /// Nil when the playlist loads and its first segment answers (network trouble counts as
+    /// fine); otherwise what was refused, e.g. "segment 403".
+    private func hlsRefusal(_ url: URL, userAgent: String) async -> String? {
         var req = URLRequest(url: url)
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 6
         guard let (data, resp) = try? await tube.session.data(for: req),
-              let code = (resp as? HTTPURLResponse)?.statusCode else { return true }
-        guard (200..<300).contains(code) else { return false }
+              let code = (resp as? HTTPURLResponse)?.statusCode else { return nil }
+        guard (200..<300).contains(code) else { return "playlist \(code)" }
         let text = String(decoding: data, as: UTF8.self)
         guard let line = text.split(whereSeparator: \.isNewline).first(where: { !$0.hasPrefix("#") && !$0.isEmpty }),
-              let seg = URL(string: String(line), relativeTo: url)?.absoluteURL else { return true }
-        let status = await status(seg, at: 0, userAgent: userAgent).code
-        return status != 403 && status != 401
+              let seg = URL(string: String(line), relativeTo: url)?.absoluteURL else { return nil }
+        guard let status = await status(seg, at: 0, userAgent: userAgent).code else { return nil }
+        return (200..<300).contains(status) ? nil : "segment \(status)"
     }
 
     private static func isBotCheck(_ reason: String?) -> Bool {
@@ -315,18 +318,22 @@ final class StreamResolver: @unchecked Sendable {
         // (signed-in web sessions often get only its streaming protocol plus an HLS manifest).
         // Otherwise the adaptive formats below play, so every quality, audio-only and the
         // checks apply.
-        if details.isLive || formats.isEmpty,
-           let s = sd["hlsManifestUrl"].string, let url = URL(string: s) {
-            if let text = try? await fetchText(url, userAgent: client.userAgent) {
+        if details.isLive || formats.isEmpty {
+            let candidates = [("account/visitor token", sd["hlsManifestUrl"].string),
+                              ("video-bound token", sd[Self.videoBoundManifestKey].string)]
+            for (label, s) in candidates {
+                guard let s, let url = URL(string: s),
+                      let text = try? await fetchText(url, userAgent: client.userAgent) else { continue }
                 var m = HLSManifest(text: text, baseURL: url)
                 // Regular videos: YouTube may refuse some of the qualities or audio tracks in
                 // the manifest (403), so only those that answer are kept.
-                if !details.isLive { m = await validated(m, client: client) }
+                if !details.isLive { m = await validated(m, client: client, label: label) }
                 if !m.variants.isEmpty {
                     return ResolvedStream(details: details, options: hlsOptions(m), hlsURL: url, manifest: m,
                                           audio: nil, streamUserAgent: client.userAgent, isLive: details.isLive,
                                           captions: Captions.tracks(json))
                 }
+                if details.isLive { break }
             }
         }
 
@@ -472,7 +479,8 @@ final class StreamResolver: @unchecked Sendable {
     /// Web clients' links: solve the signature and n challenges with the player script and add
     /// a PO token bound to this visitor (as yt-dlp does), so the formats below are directly
     /// playable. Formats whose challenges couldn't be solved lose their link.
-    private func prepareWebFormats(_ json: JSON, client: ClientProfile, player: JSChallengeSolver.Player) async -> JSON {
+    private func prepareWebFormats(_ json: JSON, client: ClientProfile, player: JSChallengeSolver.Player,
+                                   videoToken: String?) async -> JSON {
         let keys = ["adaptiveFormats", "formats"]
         let pending = keys.flatMap { json.at("streamingData.\($0)").array.compactMap(PendingLink.init) }
         let hls = json.at("streamingData.hlsManifestUrl").string
@@ -534,12 +542,20 @@ final class StreamResolver: @unchecked Sendable {
             if let n = hlsN, solutions.n[n] == nil {
                 sd["hlsManifestUrl"] = nil
             } else {
-                sd["hlsManifestUrl"] = .string(Self.preparedManifestURL(hls, n: hlsN.flatMap { n in solutions.n[n].map { (n, $0) } }, pot: pot))
+                let n = hlsN.flatMap { n in solutions.n[n].map { (n, $0) } }
+                sd["hlsManifestUrl"] = .string(Self.preparedManifestURL(hls, n: n, pot: pot))
+                // Some videos want the stream token bound to the video id instead (a YouTube
+                // experiment yt-dlp detects from the watch page); kept as a second try.
+                if let videoToken, videoToken != pot {
+                    sd[Self.videoBoundManifestKey] = .string(Self.preparedManifestURL(hls, n: n, pot: videoToken))
+                }
             }
         }
         root["streamingData"] = .object(sd)
         return .object(root)
     }
+
+    private static let videoBoundManifestKey = "glintVideoBoundHlsManifestUrl"
 
     /// The n challenge in an HLS manifest URL's path (`…/n/<challenge>/…`).
     private static func manifestN(_ url: String) -> String? {
