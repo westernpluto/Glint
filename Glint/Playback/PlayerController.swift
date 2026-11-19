@@ -245,6 +245,21 @@ final class PlayerController {
         start()
     }
 
+    /// Queue a song to play right after the current one (or start it if nothing is playing).
+    func enqueueNextMusic(_ item: MusicItem) {
+        guard let q = QueueItem(music: item) else { return }
+        if queue.isEmpty { playMusic(item); return }
+        queue.insert(q, at: min(index + 1, queue.count))
+        flash("Playing next")
+    }
+
+    func enqueueMusic(_ item: MusicItem) {
+        guard let q = QueueItem(music: item) else { return }
+        if queue.isEmpty { playMusic(item); return }
+        queue.append(q)
+        flash("Added to queue")
+    }
+
     func enqueueNext(_ video: VideoItem) {
         let item = QueueItem(video: video)
         if queue.isEmpty { queue = [item]; index = 0; start(); return }

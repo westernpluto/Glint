@@ -74,6 +74,7 @@ struct VideoRow: View {
     @Environment(PlayerController.self) private var player
 
     var body: some View {
+        HStack(alignment: .top, spacing: 4) {
         Button { player.play(video) } label: {
             HStack(alignment: .top, spacing: 12) {
                 Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, corner: 10, videoId: video.id)
@@ -93,11 +94,13 @@ struct VideoRow: View {
                     }
                 }
                 Spacer(minLength: 0)
-                MoreButton(video: video)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Beside the tappable row (not inside it), so it never competes with "play".
+        MoreButton(video: video)
+        }
         .contextMenu { VideoMenu(video: video) }
     }
 }

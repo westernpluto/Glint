@@ -154,6 +154,7 @@ struct MusicRow: View {
     @Environment(PlayerController.self) private var player
 
     var body: some View {
+        HStack(spacing: 4) {
         MusicLink(item: item, siblings: siblings) {
             HStack(spacing: 12) {
                 Color.clear.frame(width: 52, height: 52)
@@ -177,6 +178,34 @@ struct MusicRow: View {
             }
             .padding(.vertical, 6)
             .contentShape(Rectangle())
+        }
+            // Beside the tappable row (not inside it), so it never competes with "play".
+            if item.isPlayable {
+                Menu { SongMenu(item: item) } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("More actions for \(item.title)")
+            }
+        }
+    }
+}
+
+/// Actions for a song (shared by the ⋯ button and long-press).
+struct SongMenu: View {
+    var item: MusicItem
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        Button { player.playMusic(item) } label: { Label("Play", systemImage: "play") }
+        Button { player.enqueueNextMusic(item) } label: { Label("Play next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+        Button { player.enqueueMusic(item) } label: { Label("Add to queue", systemImage: "text.line.last.and.arrowtriangle.forward") }
+        Button { player.playMusic(item) } label: { Label("Start radio", systemImage: "dot.radiowaves.left.and.right") }
+        if let vid = item.videoId, let url = URL(string: "https://music.youtube.com/watch?v=\(vid)") {
+            ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
         }
     }
 }
@@ -222,12 +251,7 @@ struct MusicLink<Content: View>: View {
                 }
             } label: { content() }
             .buttonStyle(.plain)
-            .contextMenu {
-                Button { player.playMusic(item) } label: { Label("Start radio", systemImage: "dot.radiowaves.left.and.right") }
-                if let vid = item.videoId, let url = URL(string: "https://music.youtube.com/watch?v=\(vid)") {
-                    ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
-                }
-            }
+            .contextMenu { SongMenu(item: item) }
         } else if let bid = item.browseId {
             NavigationLink(value: Route.music(browseId: bid, title: item.title)) { content() }
                 .buttonStyle(.plain)
