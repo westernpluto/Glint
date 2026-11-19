@@ -149,21 +149,3 @@ struct PlaylistCard: View {
         .buttonStyle(.plain)
     }
 }
-
-struct Chip: View {
-    var title: String
-    var selected: Bool
-    var action: () -> Void
-
-    var body: some View {
-        if selected {
-            Button(title, action: action)
-                .buttonStyle(.glassProminent)
-                .font(.subheadline.weight(.semibold))
-        } else {
-            Button(title, action: action)
-                .buttonStyle(.glass)
-                .font(.subheadline.weight(.medium))
-        }
-    }
-}

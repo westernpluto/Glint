@@ -22,7 +22,7 @@ struct SearchView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(SearchFilter.allCases) { f in
-                                Chip(title: f.title, selected: f == filter) { filter = f }
+                                GlassChip(title: f.title, selected: f == filter) { filter = f }
                             }
                         }
                         .padding(.horizontal, Metrics.gutter(screen))

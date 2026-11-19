@@ -346,9 +346,6 @@ struct WatchDetails: View {
                     QualityMenu {
                         pill(player.audioOnly ? "Audio" : (player.selectedOption?.label ?? "Auto"), "slider.horizontal.3")
                     }
-                    Button { player.setAudioOnly(!player.audioOnly) } label: {
-                        pill(player.audioOnly ? "Video" : "Audio only", player.audioOnly ? "play.rectangle" : "headphones")
-                    }
                     if let id = player.current?.videoId, let url = URL(string: "https://youtu.be/\(id)") {
                         ShareLink(item: url) { pill("Share", "square.and.arrow.up") }
                     }

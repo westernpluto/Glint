@@ -53,6 +53,13 @@ enum FeedItem: Identifiable, Hashable {
     var video: VideoItem? { if case .video(let v) = self { return v }; return nil }
 }
 
+/// A titled row of videos (an Explore shelf).
+struct FeedSection: Identifiable, Hashable {
+    var id: String { title }
+    var title: String
+    var items: [VideoItem]
+}
+
 struct FeedPage {
     var items: [FeedItem]
     var continuation: String?

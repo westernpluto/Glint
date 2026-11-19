@@ -1,52 +1,30 @@
 import SwiftUI
 
+/// Home: "For you" (your feed, when signed in) plus curated topics, chosen with chips.
 struct HomeView: View {
     @Environment(AccountStore.self) private var accounts
     @Environment(AppSettings.self) private var settings
+    @State private var tab: HomeTab?
 
     var body: some View {
-        FeedScreen(reloadKey: "\(accounts.generation)-\(settings.hideShorts)",
-                   emptyTitle: accounts.isSignedIn ? "Your feed is empty" : "Search to get started",
-                   emptyIcon: accounts.isSignedIn ? "house" : "magnifyingglass") {
-            let svc = YouTubeService.shared
-            if InnerTube.shared.isSignedIn {
-                let page = try await svc.home()
-                return page.items.isEmpty ? try await svc.trending() : page
-            }
-            return try await svc.trending()
-        } header: {
-            if !accounts.isSignedIn {
-                SignedOutBanner()
+        let current = tab ?? (accounts.isSignedIn ? .forYou : .topic(.top))
+        Group {
+            switch current {
+            case .forYou:
+                FeedScreen(reloadKey: "\(accounts.generation)-\(settings.hideShorts)",
+                           emptyTitle: "Your feed is empty", emptyIcon: "house") {
+                    try await YouTubeService.shared.home()
+                } header: {
+                    HomeChips(selection: current) { tab = $0 }
+                }
+            case .topic(let topic):
+                ExploreFeed(topic: topic) {
+                    HomeChips(selection: current) { tab = $0 }
+                }
             }
         }
-        .navigationTitle(accounts.isSignedIn ? "Home" : "Trending")
-    }
-}
-
-private struct SignedOutBanner: View {
-    @State private var showSignIn = false
-    @Environment(\.screenClass) private var screen
-
-    var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "person.crop.circle.badge.plus")
-                .font(.title2)
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Make it yours").font(.subheadline.weight(.semibold))
-                Text("Sign in for recommendations and subscriptions. Search works without an account.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Sign in") { showSignIn = true }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-        }
-        .padding(14)
-        .background(Color.cardFill, in: RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous))
-        .padding(.horizontal, Metrics.gutter(screen))
-        .padding(.vertical, 8)
-        .sheet(isPresented: $showSignIn) { SignInView() }
+        .navigationTitle("Home")
+        .onChange(of: accounts.isSignedIn) { _, _ in tab = nil }
     }
 }
 

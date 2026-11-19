@@ -17,6 +17,46 @@ enum SearchFilter: String, CaseIterable, Identifiable {
     }
 }
 
+/// Topic destinations YouTube still publishes as channels with curated shelves.
+enum ExploreTopic: String, CaseIterable, Identifiable, Hashable {
+    case top, music, sports, news, live, learning
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .top: return "Top picks"
+        case .music: return "Music"
+        case .sports: return "Sports"
+        case .news: return "News"
+        case .live: return "Live"
+        case .learning: return "Learning"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .top: return "sparkles"
+        case .music: return "music.note"
+        case .sports: return "sportscourt"
+        case .news: return "newspaper"
+        case .live: return "dot.radiowaves.left.and.right"
+        case .learning: return "graduationcap"
+        }
+    }
+
+    var channelId: String? {
+        switch self {
+        case .top: return nil
+        case .music: return "UC-9-kyTW8ZkZNDHQJ6FgpwQ"
+        case .sports: return "UCEgdi0XIXXZ-qJOFPf4JSKw"
+        case .news: return "UCYfdidRxbB8Qhf0Nx7ioOYw"
+        case .live: return "UC4R8DWoMoI7CAwX8_LjQHig"
+        case .learning: return "UCtFRv9O2AHqOZjjynzrv-xg"
+        }
+    }
+}
+
 struct ChannelPage {
     var id: String
     var name: String
@@ -56,6 +96,60 @@ final class YouTubeService: @unchecked Sendable {
     func trending() async throws -> FeedPage {
         let json = try await tube.call("browse", body: ["browseId": "UC4R8DWoMoI7CAwX8_LjQHig"], authenticated: false)
         return Parser.feed(json, hideShorts: hideShorts)
+    }
+
+    /// Curated shelves for a topic. "Top picks" interleaves the leading shelves of every topic.
+    func explore(_ topic: ExploreTopic) async throws -> [FeedSection] {
+        if let id = topic.channelId { return try await sections(channelId: id) }
+        let topics: [ExploreTopic] = [.music, .news, .sports, .learning, .live]
+        let fetched: [[FeedSection]] = await withTaskGroup(of: (Int, [FeedSection]).self) { group in
+            for (i, t) in topics.enumerated() {
+                group.addTask { (i, (try? await self.explore(t)) ?? []) }
+            }
+            var out = Array(repeating: [FeedSection](), count: topics.count)
+            for await (i, secs) in group { out[i] = secs }
+            return out
+        }
+        // Lead with each topic's flagship shelf ("Trending", "Biggest Hits", "Featured", ...).
+        let flagship = ["trending", "biggest", "featured", "live now", "top stories", "new this week"]
+        let ordered: [[FeedSection]] = fetched.map { secs in
+            let lead = secs.filter { s in flagship.contains { s.title.lowercased().contains($0) } }
+            return lead + secs.filter { !lead.contains($0) }
+        }
+        var mixed: [FeedSection] = []
+        var seenVideos = Set<String>()
+        for round in 0..<2 {
+            for (i, secs) in ordered.enumerated() where round < secs.count {
+                var sec = secs[round]
+                sec.items = sec.items.filter { seenVideos.insert($0.id).inserted }
+                guard sec.items.count >= 3 else { continue }
+                // Prefix generic shelf names with their topic so "Trending" reads as "Sports · Trending".
+                if sec.title.count < 22, !sec.title.lowercased().contains(topics[i].title.lowercased()) {
+                    sec.title = "\(topics[i].title) · \(sec.title)"
+                }
+                mixed.append(sec)
+            }
+        }
+        if mixed.isEmpty { throw InnerTubeError.empty }
+        return mixed
+    }
+
+    private func sections(channelId: String) async throws -> [FeedSection] {
+        let json = try await tube.call("browse", body: ["browseId": channelId], authenticated: false)
+        var out: [FeedSection] = []
+        var seen = Set<String>()
+        json["contents"].walk { key, value in
+            guard key == "richShelfRenderer" || key == "shelfRenderer" else { return !Parser.adRenderers.contains(key) }
+            let title = value["title"].text
+                ?? value["header"].first("title")?.text
+                ?? value["header"].findAll("content").compactMap(\.string).first
+                ?? ""
+            let items = Parser.feed(value, hideShorts: true).items.compactMap(\.video).filter { seen.insert($0.id).inserted }
+            if !title.isEmpty, items.count >= 3 { out.append(FeedSection(title: title, items: items)) }
+            return false
+        }
+        if out.isEmpty { throw InnerTubeError.empty }
+        return out
     }
 
     func subscriptions() async throws -> FeedPage {

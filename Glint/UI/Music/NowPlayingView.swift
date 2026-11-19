@@ -33,7 +33,7 @@ struct NowPlayingView: View {
         if #available(iOS 27.1, *) {
             if regular {
                 ArrangementView {
-                    playerColumn(showQueueButton: false).splitArrangementLayoutRatio(0.56)
+                    playerColumn(showQueueButton: false).splitArrangementLayoutRatio(0.62)
                 } secondary: {
                     QueueList()
                 }
