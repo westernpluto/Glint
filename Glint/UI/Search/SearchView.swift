@@ -39,7 +39,6 @@ struct SearchView: View {
                             }
                             .padding(.horizontal, Metrics.gutter(screen))
                         }
-                        .scrollClipDisabled()
                     }
                     .padding(.vertical, 8)
                 }

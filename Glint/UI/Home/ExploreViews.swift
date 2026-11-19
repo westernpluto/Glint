@@ -28,7 +28,6 @@ struct HomeChips: View {
             .padding(.horizontal, Metrics.gutter(screen))
             .padding(.vertical, 4)
         }
-        .scrollClipDisabled()
     }
 }
 
@@ -144,7 +143,6 @@ struct ShelfRow: View {
                 }
                 .contentMargins(.horizontal, Metrics.gutter(screen), for: .scrollContent)
                 .scrollTargetBehavior(.viewAligned)
-                .scrollClipDisabled()
             }
         }
     }
@@ -256,9 +254,10 @@ struct SignInStrip: View {
             Image(systemName: "person.crop.circle.badge.plus")
                 .font(.title3)
                 .foregroundStyle(.tint)
-            Text("Sign in for your subscriptions and recommendations")
+            Text("Sign in to see your subscriptions")
                 .font(.subheadline)
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             Button("Sign in") { showSignIn = true }
                 .buttonStyle(.glassProminent)

@@ -127,7 +127,10 @@ enum Parser {
             ?? r["contentImage"].findAll("thumbnailBadgeViewModel").first?["text"].string
         let image = r["contentImage"].first("image").flatMap { thumbnail($0) }
 
-        if type.contains("PLAYLIST") || type.contains("ALBUM") || type.contains("PODCAST") {
+        // Stations (radio mixes), albums, podcasts and anything without an 11-character video
+        // id are collections — never present them as a playable video.
+        if type.contains("PLAYLIST") || type.contains("ALBUM") || type.contains("PODCAST")
+            || type.contains("STATION") || type.contains("MIX") || contentId.count != 11 {
             return .playlist(PlaylistItem(id: contentId, title: title, thumbnail: image,
                                           detail: badge ?? rowTexts.first?.first))
         }
