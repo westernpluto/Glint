@@ -23,6 +23,8 @@ final class HLSLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Senda
     /// Media playlists by stream URL, shared across sessions so quality switches skip the index fetch.
     private var mediaCache: [String: String] = [:]
     private var mediaOrder: [String] = []
+    /// Requests waiting on an index fetch already in flight for the same stream URL.
+    private var pending: [String: [(key: String, request: AVAssetResourceLoadingRequest)]] = [:]
 
     private static let playlistUTI = UTType(mimeType: "application/vnd.apple.mpegurl")?.identifier
         ?? "public.m3u-playlist"
@@ -104,24 +106,51 @@ final class HLSLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Senda
             return true
         }
 
+        if pending[mediaKey] != nil {
+            pending[mediaKey]?.append((key: key, request: loadingRequest))
+            return true
+        }
+        pending[mediaKey] = [(key: key, request: loadingRequest)]
+
         let ua = s.userAgent
         let urlSession = session
         Task {
+            let result: Result<String, Error>
             do {
-                let segs = try await SyntheticHLS.fetchSegments(format, session: urlSession, userAgent: ua)
-                let text = SyntheticHLS.mediaPlaylist(format, segments: segs)
-                self.queue.async {
-                    self.cache[key] = text
+                result = .success(try await Self.playlist(format, session: urlSession, userAgent: ua))
+            } catch {
+                result = .failure(error)
+            }
+            self.queue.async {
+                let waiting = self.pending.removeValue(forKey: mediaKey) ?? []
+                switch result {
+                case .success(let text):
                     self.mediaCache[mediaKey] = text
                     self.mediaOrder.append(mediaKey)
                     while self.mediaOrder.count > 24 { self.mediaCache[self.mediaOrder.removeFirst()] = nil }
-                    self.respond(loadingRequest, text)
+                    for w in waiting {
+                        self.cache[w.key] = text
+                        self.respond(w.request, text)
+                    }
+                case .failure(let error):
+                    for w in waiting where !w.request.isCancelled && !w.request.isFinished {
+                        w.request.finishLoading(with: error)
+                    }
                 }
-            } catch {
-                self.queue.async { loadingRequest.finishLoading(with: error) }
             }
         }
         return true
+    }
+
+    /// Fetches the stream index, retrying once on a network error or a server error.
+    private static func playlist(_ f: DashFormat, session: URLSession, userAgent: String) async throws -> String {
+        do {
+            return SyntheticHLS.mediaPlaylist(f, segments: try await SyntheticHLS.fetchSegments(f, session: session, userAgent: userAgent))
+        } catch let e as InnerTubeError {
+            guard case .http(let code) = e, code >= 500 || code == 429 else { throw e }
+        } catch is URLError {}
+        try await Task.sleep(for: .milliseconds(400))
+        return SyntheticHLS.mediaPlaylist(f, segments: try await SyntheticHLS.fetchSegments(f, session: session, userAgent: userAgent))
     }
 
     private func respond(_ req: AVAssetResourceLoadingRequest, _ text: String) {

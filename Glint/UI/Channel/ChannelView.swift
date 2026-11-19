@@ -36,7 +36,7 @@ struct ChannelView: View {
                     if let s = page?.subscribers { Text(s).font(.subheadline).foregroundStyle(.secondary) }
                 }
                 Spacer()
-                SubscribeButton(channelId: channelId, initial: nil)
+                SubscribeButton(channelId: channelId, initial: page?.subscribed)
             }
             Picker("Show", selection: $tab) {
                 ForEach(YouTubeService.ChannelTab.allCases) { Text($0.rawValue).tag($0) }

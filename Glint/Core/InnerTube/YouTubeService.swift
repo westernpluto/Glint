@@ -63,6 +63,8 @@ struct ChannelPage {
     var avatar: URL?
     var banner: URL?
     var subscribers: String?
+    /// nil when signed out or unknown.
+    var subscribed: Bool? = nil
     var feed: FeedPage
 }
 
@@ -245,6 +247,8 @@ final class YouTubeService: @unchecked Sendable {
             ?? header.first("subscriberCountText")?.text
         let banner = header.first("banner").flatMap { Parser.thumbnail($0["imageBannerViewModel"]["image"]) }
             ?? header.first("banner").flatMap { Parser.thumbnail($0) }
+        let subscribed = header.first("subscribeButtonRenderer")?["subscribed"].bool
+            ?? json.findAll("subscriptionStateEntity").first?["subscribed"].bool
         var feed = Parser.feed(json["contents"], hideShorts: hideShorts)
         feed.items = feed.items.map { item in
             guard case .video(var v) = item else { return item }
@@ -257,6 +261,7 @@ final class YouTubeService: @unchecked Sendable {
                            avatar: Parser.avatar(meta["avatar"]),
                            banner: banner,
                            subscribers: subs,
+                           subscribed: subscribed,
                            feed: feed)
     }
 
