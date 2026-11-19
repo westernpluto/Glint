@@ -165,6 +165,15 @@ final class PlayerController {
         start()
     }
 
+    /// Plays a video as audio only (background-friendly, light on data).
+    func playAudio(_ video: VideoItem) {
+        queue = [QueueItem(video: video)]
+        index = 0
+        audioOnly = true
+        presentation = .expanded
+        start()
+    }
+
     /// Plays a list of videos in order (playlists, "play all").
     func playList(_ videos: [VideoItem], startAt i: Int = 0) {
         guard videos.indices.contains(i) else { return }

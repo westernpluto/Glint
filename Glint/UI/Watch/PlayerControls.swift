@@ -91,7 +91,7 @@ struct Scrubber: View {
                 }
             }
         }
-        .frame(height: 24)
+        .frame(height: 36)
         .sensoryFeedback(.selection, trigger: dragValue == nil)
     }
 }
@@ -202,6 +202,11 @@ struct PlayerOverlay: View {
     @State private var visible = true
     @State private var hideTask: Task<Void, Never>?
     @State private var seekFlash: Int?
+    @State private var seekTotal = 0
+    @State private var lastTap: TapRecord?
+    @State private var flashTask: Task<Void, Never>?
+
+    private struct TapRecord { var side: Int; var time: Date; var seeking: Bool }
 
     var body: some View {
         ZStack {
@@ -213,11 +218,11 @@ struct PlayerOverlay: View {
             if visible { controls.transition(.opacity) }
 
             if let s = seekFlash {
-                Label("10", systemImage: s < 0 ? "gobackward" : "goforward")
+                Label("\(abs(s)) s", systemImage: s < 0 ? "gobackward" : "goforward")
                     .font(.headline)
                     .foregroundStyle(.white)
                     .padding(12)
-                    .background(.black.opacity(0.45), in: Capsule())
+                    .glassEffect(.regular, in: .capsule)
                     .frame(maxWidth: .infinity, alignment: s < 0 ? .leading : .trailing)
                     .padding(.horizontal, 40)
                     .allowsHitTesting(false)
@@ -296,46 +301,49 @@ struct PlayerOverlay: View {
         }
     }
 
+    /// Single tap toggles the controls immediately (no double-tap delay). A second tap on the
+    /// same side within 0.3 s seeks 10 s; keep tapping to keep seeking, like YouTube.
     private func tapZone(_ delta: Double) -> some View {
         Color.clear
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
-                player.skip(by: delta)
-                seekFlash = Int(delta)
-                Task { try? await Task.sleep(nanoseconds: 600_000_000); seekFlash = nil }
-            }
             .onTapGesture {
-                visible.toggle()
-                if visible { scheduleHide() }
+                let now = Date()
+                let side = delta < 0 ? -1 : 1
+                if let last = lastTap, last.side == side,
+                   now.timeIntervalSince(last.time) < (last.seeking ? 0.7 : 0.3) {
+                    if !last.seeking { visible.toggle() }   // undo the first tap's toggle
+                    player.skip(by: delta)
+                    seekTotal = (last.seeking ? seekTotal : 0) + Int(delta)
+                    seekFlash = seekTotal
+                    lastTap = TapRecord(side: side, time: now, seeking: true)
+                    flashTask?.cancel()
+                    flashTask = Task {
+                        try? await Task.sleep(nanoseconds: 700_000_000)
+                        if !Task.isCancelled { seekFlash = nil }
+                    }
+                } else {
+                    visible.toggle()
+                    if visible { scheduleHide() }
+                    lastTap = TapRecord(side: side, time: now, seeking: false)
+                }
             }
     }
 
     private var controls: some View {
         ZStack {
             // A light scrim keeps white text legible on bright video without a heavy gradient.
-            LinearGradient(colors: [.black.opacity(0.35), .clear, .clear, .black.opacity(0.5)],
+            LinearGradient(colors: [.black.opacity(0.3), .clear, .clear, .black.opacity(0.55)],
                            startPoint: .top, endPoint: .bottom)
                 .allowsHitTesting(false)
 
             VStack(spacing: 0) {
-                GlassEffectContainer(spacing: 10) {
-                    HStack(spacing: 10) {
-                        glassIcon(fullscreen ? "xmark" : "chevron.down",
-                                  label: fullscreen ? "Exit full screen" : "Minimize") {
-                            if fullscreen { onToggleFullscreen() } else { player.presentation = .mini }
-                        }
-                        Spacer()
-                        if let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
-                            glassIcon("pip.enter", label: "Picture in Picture") { pip.startPictureInPicture() }
-                        }
-                        QualityMenu {
-                            Image(systemName: "gearshape")
-                                .font(.body.weight(.semibold))
-                                .frame(width: 40, height: 40)
-                                .glassEffect(.regular.interactive(), in: .circle)
-                        }
-                        .accessibilityLabel("Quality and speed")
+                // Top: only the way out. Everything else lives at the bottom, within thumb reach.
+                HStack {
+                    glassIcon(fullscreen ? "xmark" : "chevron.down",
+                              label: fullscreen ? "Exit full screen" : "Minimize") {
+                        if fullscreen { onToggleFullscreen() } else { player.presentation = .mini }
                     }
+                    Spacer()
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, fullscreen ? 16 : 10)
@@ -343,57 +351,73 @@ struct PlayerOverlay: View {
                 Spacer()
 
                 if player.loadError == nil {
-                GlassEffectContainer(spacing: 24) {
-                    HStack(spacing: fullscreen ? 40 : 28) {
-                        transport("backward.end.fill", size: 46, label: "Previous") { player.previous() }
-                            .opacity(player.index > 0 ? 1 : 0)
-                            .disabled(player.index == 0)
-                        Button { player.togglePlay(); scheduleHide() } label: {
-                            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: fullscreen ? 34 : 28, weight: .semibold))
-                                .contentTransition(.symbolEffect(.replace))
-                                .frame(width: fullscreen ? 78 : 66, height: fullscreen ? 78 : 66)
-                                .glassEffect(.regular.interactive(), in: .circle)
+                    GlassEffectContainer(spacing: 24) {
+                        HStack(spacing: fullscreen ? 40 : 28) {
+                            transport("backward.end.fill", size: 46, label: "Previous") { player.previous() }
+                                .opacity(player.index > 0 ? 1 : 0)
+                                .disabled(player.index == 0)
+                            Button { player.togglePlay(); scheduleHide() } label: {
+                                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.system(size: fullscreen ? 34 : 28, weight: .semibold))
+                                    .contentTransition(.symbolEffect(.replace))
+                                    .frame(width: fullscreen ? 78 : 66, height: fullscreen ? 78 : 66)
+                                    .glassEffect(.regular.interactive(), in: .circle)
+                            }
+                            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                            .sensoryFeedback(.impact(weight: .light), trigger: player.isPlaying)
+                            transport("forward.end.fill", size: 46, label: "Next") { player.next(); scheduleHide() }
                         }
-                        .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-                        transport("forward.end.fill", size: 46, label: "Next") { player.next(); scheduleHide() }
                     }
-                }
                 }
 
                 Spacer()
 
-                VStack(spacing: 2) {
+                VStack(spacing: 4) {
                     CurrentChapterButton()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     LiveScrubber(tint: .white) { scheduleHide() }
-                    HStack(spacing: 10) {
+                    HStack(spacing: 6) {
                         if player.stream?.isLive == true {
                             Label("LIVE", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(.red)
                         } else {
                             ElapsedLabel(style: .elapsedOfTotal)
                         }
                         Spacer()
-                        if let r = player.playingResolution, !player.audioOnly {
-                            Text(r)
-                                .padding(.horizontal, 7).padding(.vertical, 2)
-                                .glassEffect(.regular, in: .capsule)
+                        QualityMenu {
+                            HStack(spacing: 4) {
+                                Image(systemName: "gearshape")
+                                if let r = player.playingResolution, !player.audioOnly { Text(r) }
+                            }
+                            .frame(height: 36)
+                            .padding(.horizontal, 10)
+                            .contentShape(Rectangle())
                         }
-                        Button(action: onToggleFullscreen) {
-                            Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                                .font(.callout.weight(.semibold))
-                                .frame(width: 32, height: 32)
+                        .accessibilityLabel("Quality, speed and sleep timer")
+                        if let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
+                            barButton("pip.enter", label: "Picture in Picture") { pip.startPictureInPicture() }
                         }
-                        .accessibilityLabel(fullscreen ? "Exit full screen" : "Full screen")
+                        barButton(fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                  label: fullscreen ? "Exit full screen" : "Full screen", action: onToggleFullscreen)
                     }
                     .font(.caption.weight(.semibold).monospacedDigit())
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, fullscreen ? 14 : 6)
+                .padding(.horizontal, 14)
+                .padding(.bottom, fullscreen ? 12 : 4)
             }
             .foregroundStyle(.white)
             .buttonStyle(.plain)
         }
+    }
+
+    /// A 36-pt bottom-bar button (full 44-pt-ish hit area with padding).
+    private func barButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button { action(); scheduleHide() } label: {
+            Image(systemName: symbol)
+                .font(.callout.weight(.semibold))
+                .frame(width: 38, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(label)
     }
 
     private func glassIcon(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
@@ -419,7 +443,7 @@ struct PlayerOverlay: View {
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled, player.isPlaying else { return }
             visible = false
         }
@@ -583,28 +607,38 @@ struct ChaptersRow: View {
 
 // MARK: Sleep timer
 
+/// The sleep timer choices (menu content).
+struct SleepTimerOptions: View {
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        Button("Off") { player.setSleepTimer(minutes: nil) }
+        ForEach([15, 30, 45, 60, 90], id: \.self) { m in
+            Button("\(m) minutes") { player.setSleepTimer(minutes: m) }
+        }
+        Button(player.current?.isMusic == true ? "End of song" : "End of video") { player.setSleepAtEnd() }
+    }
+}
+
+extension PlayerController {
+    /// Short state for labels: "Off", "25 min", "End of video".
+    var sleepSummary: String {
+        if sleepAtEnd { return current?.isMusic == true ? "End of song" : "End of video" }
+        if let at = sleepAt { return "\(max(1, Int(ceil(at.timeIntervalSinceNow / 60)))) min" }
+        return "Off"
+    }
+    var sleepActive: Bool { sleepAtEnd || sleepAt != nil }
+}
+
 /// Sleep timer choices, as a submenu.
 struct SleepTimerMenu: View {
     @Environment(PlayerController.self) private var player
 
     var body: some View {
         Menu {
-            Button("Off") { player.setSleepTimer(minutes: nil) }
-            ForEach([15, 30, 45, 60, 90], id: \.self) { m in
-                Button("\(m) minutes") { player.setSleepTimer(minutes: m) }
-            }
-            Button(player.current?.isMusic == true ? "End of song" : "End of video") { player.setSleepAtEnd() }
+            SleepTimerOptions()
         } label: {
-            Label(label, systemImage: "moon.zzz")
+            Label(player.sleepActive ? "Sleep timer · \(player.sleepSummary)" : "Sleep timer", systemImage: "moon.zzz")
         }
-    }
-
-    private var label: String {
-        if player.sleepAtEnd { return "Sleep timer · End of " + (player.current?.isMusic == true ? "song" : "video") }
-        if let at = player.sleepAt {
-            let mins = max(1, Int(ceil(at.timeIntervalSinceNow / 60)))
-            return "Sleep timer · \(mins) min"
-        }
-        return "Sleep timer"
     }
 }

@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 /// Full-window player host: the video watch page, the music Now Playing page, or the
@@ -20,6 +21,9 @@ struct PlayerScreen: View {
                 WatchView(drag: $drag)
             }
         }
+        // Follows the finger like an iOS card: slides, shrinks a little and rounds its corners.
+        .clipShape(RoundedRectangle(cornerRadius: min(drag / 12, 34), style: .continuous))
+        .scaleEffect(1 - min(drag / 4000, 0.1), anchor: .top)
         .offset(y: drag)
         .onChange(of: player.presentation) { _, p in if p != .expanded { drag = 0 } }
     }
@@ -32,18 +36,31 @@ struct CollapseGesture: ViewModifier {
 
     func body(content: Content) -> some View {
         content.gesture(
-            DragGesture(minimumDistance: 18)
+            DragGesture(minimumDistance: 12)
                 .onChanged { v in
-                    if v.translation.height > 0, abs(v.translation.height) > abs(v.translation.width) {
-                        drag = v.translation.height
-                    }
+                    let dy = v.translation.height
+                    guard abs(dy) > abs(v.translation.width) else { return }
+                    // Follow the finger downwards; resist a little upwards (rubber band).
+                    drag = dy > 0 ? dy : -sqrt(-dy) * 2
                 }
                 .onEnded { v in
-                    if v.translation.height > 140 || v.predictedEndTranslation.height > 320 {
-                        player.isFullscreen = false
-                        player.presentation = .mini
+                    let close = v.translation.height > 110 || v.predictedEndTranslation.height > 260
+                    if close {
+                        // Finish the motion first, then hand off to the mini player without a second animation.
+                        withAnimation(.smooth(duration: 0.2)) { drag = max(v.predictedEndTranslation.height, 640) }
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 190_000_000)
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                player.isFullscreen = false
+                                player.presentation = .mini
+                                drag = 0
+                            }
+                        }
+                    } else {
+                        withAnimation(.interactiveSpring(response: 0.35, dampingFraction: 0.8)) { drag = 0 }
                     }
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { drag = 0 }
                 }
         )
     }
@@ -258,6 +275,7 @@ extension Route: Identifiable {
 
 struct WatchDetails: View {
     @Binding var channelSheet: Route?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(PlayerController.self) private var player
     @Environment(AccountStore.self) private var accounts
     @Environment(\.screenClass) private var screen
@@ -327,9 +345,10 @@ struct WatchDetails: View {
         }
     }
 
+    /// Every action and playback setting, visible and labelled — nothing hidden behind gestures.
     private var actions: some View {
-        // Wraps onto more lines in narrow columns instead of clipping or scrolling sideways.
-        GlassEffectContainer(spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            GlassEffectContainer(spacing: 8) {
                 FlowLayout(spacing: 8) {
                     if accounts.isSignedIn, let id = player.current?.videoId {
                         Button {
@@ -337,7 +356,7 @@ struct WatchDetails: View {
                             liked = now
                             Task { try? await YouTubeService.shared.rate(id, now ? .like : .none) }
                         } label: {
-                            pill(player.extras?.likeCount ?? "Like", liked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                            pill(player.extras?.likeCount ?? "Like", liked ? "hand.thumbsup.fill" : "hand.thumbsup", on: liked)
                         }
                         .sensoryFeedback(.impact(weight: .light), trigger: liked)
                         Button {
@@ -345,30 +364,50 @@ struct WatchDetails: View {
                                 try? await YouTubeService.shared.saveToWatchLater(id)
                                 player.flash("Saved to Watch later")
                             }
-                        } label: { pill("Save", "clock") }
+                        } label: { pill("Watch later", "clock") }
                     } else if let likes = player.extras?.likeCount {
                         pill(likes, "hand.thumbsup", interactive: false)
-                    }
-                    QualityMenu {
-                        pill(player.audioOnly ? "Audio only" : "Quality · " + (player.selectedOption?.label ?? "Auto"),
-                             player.audioOnly ? "headphones" : "slider.horizontal.3")
                     }
                     if let id = player.current?.videoId {
                         ShareVideoMenu(videoId: id) { pill("Share", "square.and.arrow.up") }
                     }
                 }
                 .buttonStyle(.plain)
+            }
+
+            Text("Playback").font(.caption.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
+            GlassEffectContainer(spacing: 8) {
+                FlowLayout(spacing: 8) {
+                    QualityMenu {
+                        pill("Quality · " + (player.audioOnly ? "Audio" : (player.selectedOption?.label ?? "Auto")),
+                             "slider.horizontal.3")
+                    }
+                    SpeedMenu {
+                        pill("Speed · " + (player.rate == 1 ? "1×" : String(format: "%g×", player.rate)),
+                             "gauge.with.dots.needle.67percent", on: player.rate != 1)
+                    }
+                    Button { player.setAudioOnly(!player.audioOnly) } label: {
+                        pill("Audio only", "headphones", on: player.audioOnly)
+                    }
+                    Menu { SleepTimerOptions() } label: {
+                        pill(player.sleepActive ? "Sleep · \(player.sleepSummary)" : "Sleep timer", "moon.zzz", on: player.sleepActive)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
-    /// One shape, size and material for every action so the row reads as a set.
-    private func pill(_ title: String, _ icon: String, interactive: Bool = true) -> some View {
+    /// One shape, size and material for every action so the rows read as a set.
+    /// `on` tints the pill so active states (liked, audio only, timer set) are obvious.
+    private func pill(_ title: String, _ icon: String, interactive: Bool = true, on: Bool = false) -> some View {
         Label(title, systemImage: icon)
             .font(.subheadline.weight(.medium))
-            .foregroundStyle(.primary)
+            .foregroundStyle(on ? Color.white : Color.primary)
             .padding(.horizontal, 14)
             .frame(height: 38)
-            .glassEffect(interactive ? .regular.interactive() : .regular, in: .capsule)
+            .glassEffect(on ? .regular.tint(.accentColor).interactive()
+                         : (interactive ? .regular.interactive() : .regular), in: .capsule)
     }
 
     private func description(_ text: String) -> some View {

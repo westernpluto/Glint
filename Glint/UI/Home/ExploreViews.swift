@@ -122,36 +122,63 @@ struct ExploreFeed<Header: View>: View {
     }
 }
 
-/// A titled, horizontally scrolling row of video cards.
+/// A titled shelf. Narrow displays get a swipeable row; wide displays (the inner screen)
+/// get a grid that uses the full width, two rows at a time, with "Show all".
 struct ShelfRow: View {
     var section: FeedSection
     var dropFirst = false
     @Environment(\.screenClass) private var screen
     @Environment(\.containerSize) private var container
+    @State private var showAll = false
 
     var body: some View {
         let items = dropFirst ? Array(section.items.dropFirst()) : section.items
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text(section.title)
-                    .font(.title3.weight(.bold))
-                    .lineLimit(1)
-                    .padding(.horizontal, Metrics.gutter(screen))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 16) {
-                        ForEach(items) { VideoCard(video: $0).frame(width: cardWidth) }
+                HStack(alignment: .firstTextBaseline) {
+                    Text(section.title)
+                        .font(.title3.weight(.bold))
+                        .lineLimit(1)
+                    Spacer()
+                    if screen == .expanded, items.count > visibleCount {
+                        Button(showAll ? "Show less" : "Show all \(items.count)") {
+                            withAnimation(.snappy) { showAll.toggle() }
+                        }
+                        .font(.subheadline.weight(.semibold))
                     }
-                    .scrollTargetLayout()
                 }
-                .contentMargins(.horizontal, Metrics.gutter(screen), for: .scrollContent)
-                .scrollTargetBehavior(.viewAligned)
+                .padding(.horizontal, Metrics.gutter(screen))
+
+                if screen == .expanded {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 18, alignment: .top)],
+                              alignment: .leading, spacing: 22) {
+                        ForEach(showAll ? items : Array(items.prefix(visibleCount))) { VideoCard(video: $0) }
+                    }
+                    .padding(.horizontal, Metrics.gutter(screen))
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 16) {
+                            ForEach(items) { VideoCard(video: $0).frame(width: cardWidth) }
+                        }
+                        .scrollTargetLayout()
+                    }
+                    .contentMargins(.horizontal, Metrics.gutter(screen), for: .scrollContent)
+                    .scrollTargetBehavior(.viewAligned)
+                }
             }
         }
     }
 
+    /// Two full rows of the adaptive grid.
+    private var visibleCount: Int {
+        let usable = max(container.width - Metrics.gutter(screen) * 2, 260)
+        let columns = max(1, Int((usable + 18) / (260 + 18)))
+        return columns * 2
+    }
+
     /// Big enough to read, small enough that the next card peeks in as a scroll hint.
     private var cardWidth: CGFloat {
-        screen == .expanded ? 300 : min(300, max(236, container.width * 0.7))
+        min(300, max(236, container.width * 0.7))
     }
 }
 

@@ -98,20 +98,7 @@ struct NowPlayingView: View {
                     .foregroundStyle(.secondary)
                 }
                 transport(showQueueButton: showQueueButton)
-                if showQueueButton {
-                    HStack {
-                        Button { sheetTab = .lyrics; showQueue = true } label: {
-                            Label("Lyrics", systemImage: "quote.bubble")
-                        }
-                        Spacer()
-                        Button { sheetTab = .queue; showQueue = true } label: {
-                            Label("Up next", systemImage: "list.bullet")
-                        }
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .buttonStyle(.plain)
-                }
+                actionRow(showQueueButton: showQueueButton)
                 if let n = player.notice {
                     Text(n).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity)
                 } else if let e = player.loadError {
@@ -125,6 +112,7 @@ struct NowPlayingView: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// Top: only the way out (and a grab area). Everything else is in the bottom action row.
     private var topBar: some View {
         HStack {
             Button { player.presentation = .mini } label: {
@@ -136,23 +124,12 @@ struct NowPlayingView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Minimize")
             Spacer()
-            Picker("Mode", selection: Binding(get: { player.audioOnly }, set: { player.setAudioOnly($0) })) {
-                Text("Song").tag(true)
-                Text("Video").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 180)
+            Capsule().fill(.white.opacity(0.4)).frame(width: 36, height: 5).accessibilityHidden(true)
             Spacer()
-            Group {
-                if player.audioOnly {
-                    MusicMoreMenu { moreIcon }
-                } else {
-                    QualityMenu { moreIcon }
-                }
-            }
-            .accessibilityLabel("More")
+            Color.clear.frame(width: 40, height: 40)
         }
         .padding(.top, 8)
+        .contentShape(Rectangle())
         .collapsesPlayer($drag)
     }
 
@@ -178,11 +155,46 @@ struct NowPlayingView: View {
         .collapsesPlayer($drag)
     }
 
-    private var moreIcon: some View {
-        Image(systemName: "ellipsis")
-            .font(.body.weight(.semibold))
-            .frame(width: 40, height: 40)
-            .glassEffect(.regular.interactive(), in: .circle)
+    /// One thumb-reachable row of labelled actions under the transport.
+    private func actionRow(showQueueButton: Bool) -> some View {
+        HStack(spacing: 0) {
+            if showQueueButton {
+                actionTile("Lyrics", "quote.bubble") { sheetTab = .lyrics; showQueue = true }
+                actionTile("Up next", "list.bullet") { sheetTab = .queue; showQueue = true }
+            }
+            actionTile(player.audioOnly ? "Video" : "Song", player.audioOnly ? "play.rectangle" : "music.note") {
+                player.setAudioOnly(!player.audioOnly)
+            }
+            Menu { SleepTimerOptions() } label: {
+                tileLabel(player.sleepActive ? player.sleepSummary : "Sleep", "moon.zzz", on: player.sleepActive)
+            }
+            .frame(maxWidth: .infinity)
+            Group {
+                if player.audioOnly {
+                    MusicMoreMenu { tileLabel("More", "ellipsis") }
+                } else {
+                    QualityMenu { tileLabel("More", "ellipsis") }
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 4)
+    }
+
+    private func actionTile(_ title: String, _ icon: String, on: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) { tileLabel(title, icon, on: on) }
+            .frame(maxWidth: .infinity)
+    }
+
+    private func tileLabel(_ title: String, _ icon: String, on: Bool = false) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: icon).font(.title3)
+            Text(title).font(.caption2.weight(.semibold)).lineLimit(1)
+        }
+        .foregroundStyle(on ? Color.accentColor : Color.secondary)
+        .frame(maxWidth: .infinity, minHeight: 48)
+        .contentShape(Rectangle())
     }
 
     private var titleBlock: some View {
@@ -349,12 +361,10 @@ struct MiniPlayerAccessory: View {
                 }
                 .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                 if placement != .inline {
-                    if item.isMusic {
-                        Button { player.next() } label: {
-                            Image(systemName: "forward.fill").frame(width: 32, height: 36)
-                        }
-                        .accessibilityLabel("Next")
+                    Button { player.next() } label: {
+                        Image(systemName: "forward.fill").frame(width: 32, height: 36)
                     }
+                    .accessibilityLabel("Next")
                     Button { player.close() } label: {
                         Image(systemName: "xmark")
                             .font(.subheadline.weight(.bold))
@@ -366,6 +376,9 @@ struct MiniPlayerAccessory: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 12)
+            .overlay(alignment: .bottom) {
+                ProgressLine().padding(.horizontal, 18).opacity(placement == .inline ? 0 : 1)
+            }
             .contentShape(Rectangle())
             .onTapGesture { player.presentation = .expanded }
             .contextMenu {

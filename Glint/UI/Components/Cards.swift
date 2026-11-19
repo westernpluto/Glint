@@ -41,9 +41,28 @@ struct VideoCard: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                MoreButton(video: video)
             }
         }
         .contextMenu { VideoMenu(video: video) }
+    }
+}
+
+/// Visible "⋯" for a video's actions (the same as long-press, but discoverable).
+struct MoreButton: View {
+    var video: VideoItem
+
+    var body: some View {
+        Menu {
+            VideoMenu(video: video)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("More actions for \(video.title)")
     }
 }
 
@@ -74,6 +93,7 @@ struct VideoRow: View {
                     }
                 }
                 Spacer(minLength: 0)
+                MoreButton(video: video)
             }
             .contentShape(Rectangle())
         }
@@ -89,6 +109,7 @@ struct VideoMenu: View {
 
     var body: some View {
         Button { player.play(video) } label: { Label("Play", systemImage: "play") }
+        Button { player.playAudio(video) } label: { Label("Listen (audio only)", systemImage: "headphones") }
         Button { player.enqueueNext(video) } label: { Label("Play next", systemImage: "text.line.first.and.arrowtriangle.forward") }
         Button { player.enqueue(video) } label: { Label("Add to queue", systemImage: "text.line.last.and.arrowtriangle.forward") }
         if accounts.isSignedIn {
