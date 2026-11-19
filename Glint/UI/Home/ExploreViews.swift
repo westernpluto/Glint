@@ -130,6 +130,7 @@ struct ShelfRow: View {
     @Environment(\.screenClass) private var screen
     @Environment(\.containerSize) private var container
     @State private var showAll = false
+    @State private var width: CGFloat = 0
 
     var body: some View {
         let items = dropFirst ? Array(section.items.dropFirst()) : section.items
@@ -166,12 +167,14 @@ struct ShelfRow: View {
                     .scrollTargetBehavior(.viewAligned)
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         }
     }
 
-    /// Two full rows of the adaptive grid.
+    /// Two full rows of the adaptive grid (measured from this shelf's own width, which is
+    /// narrower than the window when the sidebar is showing).
     private var visibleCount: Int {
-        let usable = max(container.width - Metrics.gutter(screen) * 2, 260)
+        let usable = max((width > 0 ? width : container.width) - Metrics.gutter(screen) * 2, 260)
         let columns = max(1, Int((usable + 18) / (260 + 18)))
         return columns * 2
     }

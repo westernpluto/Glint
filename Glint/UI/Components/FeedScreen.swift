@@ -135,7 +135,7 @@ struct FeedScreen<Header: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header()
-                if !loaded && loading && items.isEmpty {
+                if !loaded && error == nil && items.isEmpty {
                     SkeletonFeed().padding(.top, 8)
                 }
                 FeedGrid(items: items)

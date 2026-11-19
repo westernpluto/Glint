@@ -22,8 +22,8 @@ struct PlayerScreen: View {
             }
         }
         // Follows the finger like an iOS card: slides, shrinks a little and rounds its corners.
-        .clipShape(RoundedRectangle(cornerRadius: min(drag / 12, 34), style: .continuous))
-        .scaleEffect(1 - min(drag / 4000, 0.1), anchor: .top)
+        .clipShape(RoundedRectangle(cornerRadius: min(max(drag, 0) / 12, 34), style: .continuous))
+        .scaleEffect(1 - min(max(drag, 0) / 4000, 0.1), anchor: .top)
         .offset(y: drag)
         .onChange(of: player.presentation) { _, p in if p != .expanded { drag = 0 } }
     }

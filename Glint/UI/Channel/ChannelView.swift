@@ -4,11 +4,14 @@ struct ChannelView: View {
     var channelId: String
     var name: String?
     @State private var page: ChannelPage?
+    @State private var tab: YouTubeService.ChannelTab = .videos
     @Environment(\.screenClass) private var screen
 
     var body: some View {
-        FeedScreen(reloadKey: channelId, emptyTitle: "No videos", emptyIcon: "film") {
-            let p = try await YouTubeService.shared.channel(channelId)
+        FeedScreen(reloadKey: "\(channelId)|\(tab.rawValue)",
+                   emptyTitle: tab == .live ? "No live streams" : tab == .playlists ? "No playlists" : "No videos",
+                   emptyIcon: "film") {
+            let p = try await YouTubeService.shared.channel(channelId, tab: tab)
             await MainActor.run { page = p }
             return p.feed
         } header: {
@@ -35,6 +38,11 @@ struct ChannelView: View {
                 Spacer()
                 SubscribeButton(channelId: channelId, initial: nil)
             }
+            Picker("Show", selection: $tab) {
+                ForEach(YouTubeService.ChannelTab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 420)
         }
         .padding(.horizontal, Metrics.gutter(screen))
         .padding(.top, 8)

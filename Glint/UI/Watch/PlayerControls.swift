@@ -228,7 +228,7 @@ struct PlayerOverlay: View {
                     .allowsHitTesting(false)
             }
 
-            if (player.isLoading || player.isBuffering) && player.loadError == nil {
+            if !visible, (player.isLoading || player.isBuffering), player.loadError == nil {
                 ProgressView().tint(.white).controlSize(.large).allowsHitTesting(false)
             }
 
@@ -357,11 +357,18 @@ struct PlayerOverlay: View {
                                 .opacity(player.index > 0 ? 1 : 0)
                                 .disabled(player.index == 0)
                             Button { player.togglePlay(); scheduleHide() } label: {
-                                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: fullscreen ? 34 : 28, weight: .semibold))
-                                    .contentTransition(.symbolEffect(.replace))
-                                    .frame(width: fullscreen ? 78 : 66, height: fullscreen ? 78 : 66)
-                                    .glassEffect(.regular.interactive(), in: .circle)
+                                ZStack {
+                                    if player.isLoading || player.isBuffering {
+                                        // Loading lives inside the play button instead of on top of it.
+                                        ProgressView().tint(.white).controlSize(.large)
+                                    } else {
+                                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                                            .font(.system(size: fullscreen ? 34 : 28, weight: .semibold))
+                                            .contentTransition(.symbolEffect(.replace))
+                                    }
+                                }
+                                .frame(width: fullscreen ? 78 : 66, height: fullscreen ? 78 : 66)
+                                .glassEffect(.regular.interactive(), in: .circle)
                             }
                             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                             .sensoryFeedback(.impact(weight: .light), trigger: player.isPlaying)

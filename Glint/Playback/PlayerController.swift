@@ -382,6 +382,8 @@ final class PlayerController {
         switch status {
         case .readyToPlay:
             isLoading = false
+            failures = 0          // recovered: the next failure gets the full recovery path again
+            loadError = nil
             let d = item.duration.seconds
             if d.isFinite, d > 0 { duration = d }
         case .failed:
@@ -413,6 +415,8 @@ final class PlayerController {
     func togglePlay() { isPlaying ? pause() : resume() }
 
     func resume() {
+        // After an error, "play" means "try again".
+        if loadError != nil, current != nil { retry(); return }
         // Stream links expire after ~6 h; refresh them before resuming a long-paused video.
         if stream != nil, stream?.isLive != true, Date().timeIntervalSince(resolvedAt) > 4 * 3600 {
             refresh(at: currentTime)
@@ -530,6 +534,7 @@ final class PlayerController {
         player.pause()
         player.replaceCurrentItem(with: nil)
         queue = []; index = 0; stream = nil; details = nil; extras = nil
+        sleepAt = nil; sleepAtEnd = false; manualSegment = nil
         presentation = .hidden
         isFullscreen = false
         nowPlaying.update()

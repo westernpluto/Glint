@@ -215,8 +215,20 @@ final class YouTubeService: @unchecked Sendable {
         return (title, Parser.feed(json, hideShorts: false))
     }
 
-    func channel(_ id: String) async throws -> ChannelPage {
-        let json = try await tube.call("browse", body: ["browseId": id, "params": "EgZ2aWRlb3PyBgQKAjoA"])
+    enum ChannelTab: String, CaseIterable, Identifiable {
+        case videos = "Videos", live = "Live", playlists = "Playlists"
+        var id: String { rawValue }
+        var params: String {
+            switch self {
+            case .videos: return "EgZ2aWRlb3PyBgQKAjoA"
+            case .live: return "EgdzdHJlYW1z8gYECgJ6AA%3D%3D"
+            case .playlists: return "EglwbGF5bGlzdHPyBgQKAkIA"
+            }
+        }
+    }
+
+    func channel(_ id: String, tab: ChannelTab = .videos) async throws -> ChannelPage {
+        let json = try await tube.call("browse", body: ["browseId": id, "params": tab.params])
         let meta = json.at("metadata.channelMetadataRenderer")
         let header = json["header"]
         let subs = header.findAll("content").compactMap { $0.string }.first { $0.lowercased().contains("subscriber") }

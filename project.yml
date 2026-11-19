@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.7.1"
-    CURRENT_PROJECT_VERSION: "21"
+    MARKETING_VERSION: "1.7.2"
+    CURRENT_PROJECT_VERSION: "22"
     IPHONEOS_DEPLOYMENT_TARGET: "27.0"
 
 targets:
@@ -35,7 +35,6 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationPortraitUpsideDown
-        UIRequiresFullScreen: false
         UIStatusBarStyle: UIStatusBarStyleDefault
         ITSAppUsesNonExemptEncryption: false
     settings:
