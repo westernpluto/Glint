@@ -400,6 +400,12 @@ struct PlayerOverlay: View {
                             .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Quality, speed and sleep timer")
+                        if !player.captionTracks.isEmpty, !player.audioOnly {
+                            barButton(player.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill",
+                                      label: player.selectedCaption == nil ? "Turn captions on" : "Turn captions off") {
+                                player.toggleCaptions()
+                            }
+                        }
                         if let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
                             barButton("pip.enter", label: "Picture in Picture") { pip.startPictureInPicture() }
                         }

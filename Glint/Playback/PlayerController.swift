@@ -58,6 +58,12 @@ final class PlayerController {
     var segments: [SponsorSegment] = []
     var notice: String?
     var highlight: SponsorSegment?
+    /// Captions for the current video.
+    var selectedCaption: CaptionTrack?
+    var captionCues: [CaptionCue] = []
+    var captionTracks: [CaptionTrack] { stream?.captions ?? [] }
+    @ObservationIgnored private var captionTask: Task<Void, Never>?
+
     /// A segment the user chose to skip by hand, while the playhead is inside it.
     var manualSegment: SponsorSegment?
     /// Pause at this time, or at the end of the current item when `sleepAtEnd`.
@@ -278,6 +284,7 @@ final class PlayerController {
         player.replaceCurrentItem(with: nil)
         details = nil; extras = nil; stream = nil; selectedOption = nil
         segments = []; skipped = []; highlight = nil; manualSegment = nil; loadError = nil
+        captionTask?.cancel(); selectedCaption = nil; captionCues = []
         currentTime = 0; duration = 0; playingResolution = nil; failures = 0
         player.isMuted = false; mutedBySponsor = false
         isLoading = true
@@ -306,6 +313,10 @@ final class PlayerController {
                 self.selectedOption = self.preferredOption(in: s)
                 self.duration = Double(s.details.lengthSeconds ?? 0)
                 self.resolvedAt = Date()
+                if self.settings.captionsOn, !isMusic,
+                   let t = Captions.preferred(s.captions, language: Locale.current.language.languageCode?.identifier ?? "en") {
+                    self.loadCaptions(t)
+                }
                 let resumeAt = (isMusic || s.isLive) ? nil : WatchHistory.shared.position(for: videoId)
                 self.installItem(at: resumeAt ?? 0)
                 if let resumeAt { self.flash("Resuming at \(formatTime(resumeAt))") }
@@ -624,6 +635,38 @@ final class PlayerController {
         guard let s = manualSegment else { return }
         manualSegment = nil
         seek(to: s.end)
+    }
+
+    // MARK: Captions
+
+    /// Choose a caption track (nil turns captions off). Remembered as the default.
+    func selectCaption(_ track: CaptionTrack?) {
+        settings.captionsOn = track != nil
+        if let track { loadCaptions(track); flash("Captions: \(track.label)") } else {
+            captionTask?.cancel()
+            selectedCaption = nil
+            captionCues = []
+            flash("Captions off")
+        }
+    }
+
+    /// The CC button: off ↔ the best track for the device language.
+    func toggleCaptions() {
+        if selectedCaption != nil { selectCaption(nil); return }
+        let lang = Locale.current.language.languageCode?.identifier ?? "en"
+        if let t = Captions.preferred(captionTracks, language: lang) { selectCaption(t) } else { flash("No captions for this video") }
+    }
+
+    private func loadCaptions(_ track: CaptionTrack) {
+        selectedCaption = track
+        captionCues = []
+        captionTask?.cancel()
+        let id = current?.videoId
+        captionTask = Task { [weak self] in
+            let cues = (try? await Captions.load(track)) ?? []
+            guard let self, !Task.isCancelled, self.current?.videoId == id else { return }
+            self.captionCues = cues
+        }
     }
 
     // MARK: Queue & sleep timer

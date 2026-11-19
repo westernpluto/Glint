@@ -47,6 +47,7 @@ struct ResolvedStream {
     var audio: DashFormat?           // best AAC stream
     var streamUserAgent: String
     var isLive: Bool
+    var captions: [CaptionTrack] = []
 
     /// Video formats suitable for "Auto" (one per resolution, decodable).
     var autoFormats: [DashFormat] {
@@ -120,7 +121,8 @@ final class StreamResolver: @unchecked Sendable {
                 let m = HLSManifest(text: text, baseURL: url)
                 if !m.variants.isEmpty {
                     return ResolvedStream(details: details, options: hlsOptions(m), hlsURL: url, manifest: m,
-                                          audio: nil, streamUserAgent: client.userAgent, isLive: true)
+                                          audio: nil, streamUserAgent: client.userAgent, isLive: true,
+                                          captions: Captions.tracks(json))
                 }
             }
         }
@@ -141,7 +143,8 @@ final class StreamResolver: @unchecked Sendable {
         }
         let options = best.values.sorted(by: Self.order)
         return ResolvedStream(details: details, options: options, hlsURL: nil, manifest: nil,
-                              audio: audio, streamUserAgent: client.userAgent, isLive: details.isLive)
+                              audio: audio, streamUserAgent: client.userAgent, isLive: details.isLive,
+                              captions: Captions.tracks(json))
     }
 
     /// AVC up to 1080p (hardware decode everywhere, light on battery); AV1 above.

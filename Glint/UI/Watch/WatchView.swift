@@ -80,6 +80,7 @@ struct VideoSurfaceView: View {
         ZStack {
             Color.black
             PlayerSurface(primary: true)
+            if !player.audioOnly { CaptionOverlay() }
             if player.audioOnly, let t = player.current?.thumbnail {
                 RemoteImage(url: t, contentMode: .fit)
                     .overlay {
@@ -389,6 +390,21 @@ struct WatchDetails: View {
                     Button { player.setAudioOnly(!player.audioOnly) } label: {
                         pill("Audio only", "headphones", on: player.audioOnly)
                     }
+                    if !player.captionTracks.isEmpty {
+                        Menu {
+                            Button { player.selectCaption(nil) } label: {
+                                if player.selectedCaption == nil { Label("Off", systemImage: "checkmark") } else { Text("Off") }
+                            }
+                            ForEach(player.captionTracks) { t in
+                                Button { player.selectCaption(t) } label: {
+                                    if player.selectedCaption?.id == t.id { Label(t.label, systemImage: "checkmark") } else { Text(t.label) }
+                                }
+                            }
+                        } label: {
+                            pill(player.selectedCaption.map { "Captions · \($0.name)" } ?? "Captions", "captions.bubble",
+                                 on: player.selectedCaption != nil)
+                        }
+                    }
                     Menu { SleepTimerOptions() } label: {
                         pill(player.sleepActive ? "Sleep · \(player.sleepSummary)" : "Sleep timer", "moon.zzz", on: player.sleepActive)
                     }
@@ -556,5 +572,33 @@ struct ShareVideoMenu<MenuLabel: View>: View {
         } label: {
             label()
         }
+    }
+}
+
+/// The caption line for the current moment, drawn over the video.
+struct CaptionOverlay: View {
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        let line = player.captionCues.isEmpty ? nil : Captions.text(at: player.currentTime, in: player.captionCues)
+        GeometryReader { g in
+            if let text = line {
+                Text(text)
+                    .font(.system(size: max(14, min(g.size.width / 32, 26)), weight: .semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(maxWidth: g.size.width * 0.86)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, max(18, g.size.height * 0.1))
+                    .transition(.opacity)
+                    .id(text)
+            }
+        }
+        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.12), value: line)
+        .accessibilityHidden(true)
     }
 }

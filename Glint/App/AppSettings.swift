@@ -49,6 +49,8 @@ final class AppSettings {
         }
     }
     var preferHDR: Bool { didSet { d.set(preferHDR, forKey: "preferHDR") } }
+    /// Turn captions on automatically (in the device language when available).
+    var captionsOn: Bool { didSet { d.set(captionsOn, forKey: "captionsOn") } }
 
     static let qualityChoices: [(Int, String)] = [
         (0, "Auto"), (4320, "8K · 4320p"), (2160, "4K · 2160p"), (1440, "1440p"),
@@ -72,6 +74,7 @@ final class AppSettings {
         sponsorManual = Set((d.stringArray(forKey: "sbManual") ?? ["intro", "outro", "preview", "filler"])
             .compactMap(SponsorCategory.init(rawValue:)))
         preferHDR = d.bool(forKey: "preferHDR")
+        captionsOn = d.bool(forKey: "captionsOn")
         if let raw = d.stringArray(forKey: "sbCategories") {
             sponsorCategories = Set(raw.compactMap(SponsorCategory.init(rawValue:)))
         } else {

@@ -5,6 +5,9 @@ struct SettingsView: View {
     @Environment(AccountStore.self) private var accounts
     @Environment(AppSettings.self) private var settings
     @State private var showSignIn = false
+    @State private var confirmSignOut = false
+    @State private var cacheSize = URLCache.shared.currentDiskUsage
+    @AppStorage("recentSearches") private var recentSearches = ""
 
     var body: some View {
         @Bindable var s = settings
@@ -35,11 +38,18 @@ struct SettingsView: View {
                     }
                     if accounts.isSignedIn {
                         Button("Browse signed out") { accounts.switchTo(nil) }
+                        if let active = accounts.active {
+                            Button("Sign out of \(active.info.name)", role: .destructive) { confirmSignOut = true }
+                                .confirmationDialog("Sign out of \(active.info.name)?", isPresented: $confirmSignOut,
+                                                    titleVisibility: .visible) {
+                                    Button("Sign out", role: .destructive) { accounts.remove(active.id) }
+                                }
+                        }
                     }
                 } header: {
                     Text("Accounts")
                 } footer: {
-                    Text("Each account signs in separately and is stored only in this iPhone's Keychain. Swipe to sign out.")
+                    Text("Each account signs in separately and is stored only in this iPhone's Keychain.")
                 }
 
                 Section("Playback") {
@@ -53,6 +63,7 @@ struct SettingsView: View {
                             Text(r == 1 ? "Normal" : String(format: "%g×", r)).tag(r)
                         }
                     }
+                    Toggle("Captions on by default", isOn: $s.captionsOn)
                     Toggle("Autoplay next video", isOn: $s.autoplay)
                     Toggle("Background playback", isOn: $s.backgroundPlayback)
                     Toggle("Music plays audio only", isOn: $s.musicAudioOnly)
@@ -90,8 +101,26 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button("Clear watch history", role: .destructive) { WatchHistory.shared.clear() }
+                        .disabled(WatchHistory.shared.recent.isEmpty)
+                    Button("Clear search history", role: .destructive) { recentSearches = "" }
+                        .disabled(recentSearches.isEmpty)
+                    Button(role: .destructive) {
+                        URLCache.shared.removeAllCachedResponses()
+                        cacheSize = URLCache.shared.currentDiskUsage
+                    } label: {
+                        LabeledContent("Clear cached images and data",
+                                       value: ByteCountFormatter.string(fromByteCount: Int64(cacheSize), countStyle: .file))
+                    }
+                } header: {
+                    Text("Privacy & storage")
+                } footer: {
+                    Text("Watch and search history are kept only on this iPhone.")
+                }
+
+                Section {
                     LabeledContent("Ads", value: "Never shown")
-                    LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
+                    LabeledContent("Version", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
                 } header: {
                     Text("About")
                 } footer: {
