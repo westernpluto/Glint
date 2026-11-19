@@ -144,11 +144,14 @@ final class StreamResolver: @unchecked Sendable {
         var limited: ResolvedStream?
         var progressive: ResolvedStream?
         var refusals = 0, botChecks = 0
+        var answeredWithoutLinks = false
         let signedIn = tube.isSignedIn
         var order = orderedClients
-        if signedIn, let i = order.firstIndex(where: \.isWebPlayback) {
-            // Signed in, the web client carries the account (yt-dlp's choice with cookies).
-            order.insert(order.remove(at: i), at: 0)
+        if signedIn {
+            // Signed in, the web clients carry the account (yt-dlp's choice with cookies):
+            // MWEB, then Safari WEB for its HLS manifest.
+            let web = order.filter(\.isWebPlayback) + [.webSafari]
+            order = web + order.filter { !$0.isWebPlayback }
         }
         for client in order {
             var webPlayer: JSChallengeSolver.Player?
@@ -185,11 +188,13 @@ final class StreamResolver: @unchecked Sendable {
             }
             if let webPlayer { json = await prepareWebFormats(json, client: client, player: webPlayer) }
             guard var stream = await build(json, client: client) else {
+                if client.isWebPlayback { answeredWithoutLinks = true }
                 trace?("\(client.key): no usable formats")
                 continue
             }
             stream.clientKey = client.key
-            if stream.isLive || stream.hlsURL != nil { trace?("\(client.key): live HLS"); return stream }
+            if stream.hlsURL != nil { trace?("\(client.key): \(stream.isLive ? "live " : "")HLS, \(stream.options.count) qualities"); return stream }
+            if stream.progressiveURL != nil, stream.audio == nil { trace?("\(client.key): only the 360p muxed file has a link"); return stream }
             let check = await reachability(stream, userAgent: client.userAgent)
             trace?("\(client.key): \(stream.options.count) qualities, audio \(stream.audio.map { "itag \($0.itag)" } ?? "none"), check \(check.description)")
             if check.ok { return stream }
@@ -226,6 +231,9 @@ final class StreamResolver: @unchecked Sendable {
                 await PoTokenProvider.shared.reset()
                 return try await resolveFresh(videoId: videoId, isRetry: true)
             }
+            if answeredWithoutLinks {
+                throw InnerTubeError.unplayable("YouTube let your account through but sent no stream Glint can play for this video (only its own streaming format). Try again later.")
+            }
             throw InnerTubeError.unplayable(signedIn
                 ? "YouTube is asking to confirm you're not a bot, even signed in. Try again in a while or on another network."
                 : "YouTube is asking to confirm you're not a bot. Sign in to YouTube in Settings, then try again.")
@@ -242,25 +250,34 @@ final class StreamResolver: @unchecked Sendable {
         let details = Self.details(json["videoDetails"], microformat: json.at("microformat.playerMicroformatRenderer"))
         let sd = json["streamingData"]
 
-        // Live: real HLS. (Some clients also send a manifest for regular videos; those play
-        // from the adaptive formats below so every quality, audio-only and the checks apply.)
-        if details.isLive || sd["adaptiveFormats"].array.isEmpty,
+        let formats = sd["adaptiveFormats"].array.compactMap(DashFormat.init)
+
+        // HLS: live streams, and regular videos when YouTube sent no direct adaptive links
+        // (signed-in web sessions often get only its streaming protocol plus an HLS manifest).
+        // Otherwise the adaptive formats below play, so every quality, audio-only and the
+        // checks apply.
+        if details.isLive || formats.isEmpty,
            let s = sd["hlsManifestUrl"].string, let url = URL(string: s) {
             if let text = try? await fetchText(url, userAgent: client.userAgent) {
                 let m = HLSManifest(text: text, baseURL: url)
                 if !m.variants.isEmpty {
                     return ResolvedStream(details: details, options: hlsOptions(m), hlsURL: url, manifest: m,
-                                          audio: nil, streamUserAgent: client.userAgent, isLive: true,
+                                          audio: nil, streamUserAgent: client.userAgent, isLive: details.isLive,
                                           captions: Captions.tracks(json))
                 }
             }
         }
 
-        let formats = sd["adaptiveFormats"].array.compactMap(DashFormat.init)
         let audio = formats.filter { $0.isAudio && $0.codecs.hasPrefix("mp4a") }
             .max { $0.bitrate < $1.bitrate }
         let videos = formats.filter { !$0.isAudio && codecSupported($0.codecs) }
-        guard audio != nil || !videos.isEmpty else { return nil }
+        guard audio != nil || !videos.isEmpty else {
+            // Only the muxed 360p file has a link: play that (full length, video + audio).
+            guard let url = Self.progressiveURL(json) else { return nil }
+            return ResolvedStream(details: details, options: [], hlsURL: nil, manifest: nil,
+                                  audio: nil, streamUserAgent: client.userAgent, isLive: details.isLive,
+                                  captions: Captions.tracks(json), progressiveURL: url)
+        }
 
         var best: [String: StreamOption] = [:]
         for v in videos {
@@ -396,7 +413,11 @@ final class StreamResolver: @unchecked Sendable {
     private func prepareWebFormats(_ json: JSON, client: ClientProfile, player: JSChallengeSolver.Player) async -> JSON {
         let keys = ["adaptiveFormats", "formats"]
         let pending = keys.flatMap { json.at("streamingData.\($0)").array.compactMap(PendingLink.init) }
-        guard !pending.isEmpty else {
+        let hls = json.at("streamingData.hlsManifestUrl").string
+        let hlsN = hls.flatMap(Self.manifestN)
+        let adaptiveLinks = json.at("streamingData.adaptiveFormats").array.compactMap(PendingLink.init).count
+        trace?("\(client.key): \(adaptiveLinks) adaptive links, \(pending.count - adaptiveLinks) muxed, HLS \(hls == nil ? "no" : "yes")")
+        guard !pending.isEmpty || hls != nil else {
             trace?("\(client.key): YouTube sent no direct links (streaming-protocol-only session)")
             return json
         }
@@ -404,7 +425,7 @@ final class StreamResolver: @unchecked Sendable {
         let solutions: JSChallengeSolver.Solutions
         do {
             solutions = try await JSChallengeSolver.shared.solve(
-                n: pending.compactMap(\.n), sig: pending.compactMap(\.s), player: player)
+                n: pending.compactMap(\.n) + [hlsN].compactMap { $0 }, sig: pending.compactMap(\.s), player: player)
         } catch {
             trace?("\(client.key): challenges not solved (\(error.localizedDescription))")
             return json
@@ -446,8 +467,41 @@ final class StreamResolver: @unchecked Sendable {
         for key in keys {
             if case .array(let formats) = sd[key] { sd[key] = .array(formats.map(rewrite)) }
         }
+        if let hls {
+            // As yt-dlp: solve the n in the manifest path, add /pot/<token> before the file part.
+            if let n = hlsN, solutions.n[n] == nil {
+                sd["hlsManifestUrl"] = nil
+            } else {
+                sd["hlsManifestUrl"] = .string(Self.preparedManifestURL(hls, n: hlsN.flatMap { n in solutions.n[n].map { (n, $0) } }, pot: pot))
+            }
+        }
         root["streamingData"] = .object(sd)
         return .object(root)
+    }
+
+    /// The n challenge in an HLS manifest URL's path (`…/n/<challenge>/…`).
+    private static func manifestN(_ url: String) -> String? {
+        guard let path = URLComponents(string: url)?.percentEncodedPath else { return nil }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard let i = parts.firstIndex(of: "n"), i + 1 < parts.count else { return nil }
+        return String(parts[i + 1])
+    }
+
+    private static func preparedManifestURL(_ url: String, n: (String, String)?, pot: String?) -> String {
+        guard var c = URLComponents(string: url) else { return url }
+        var path = c.percentEncodedPath
+        if let n { path = path.replacingOccurrences(of: "/n/\(n.0)/", with: "/n/\(n.1)/") }
+        if let pot {
+            var suffix = ""
+            for s in ["/file/index.m3u8", "/playlist/index.m3u8"] where path.hasSuffix(s) {
+                suffix = s
+                path = String(path.dropLast(s.count))
+            }
+            while path.hasSuffix("/") { path.removeLast() }
+            path += "/pot/" + (pot.addingPercentEncoding(withAllowedCharacters: queryValueAllowed) ?? pot) + suffix
+        }
+        c.percentEncodedPath = path
+        return c.string ?? url
     }
 
     private static let queryValueAllowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))

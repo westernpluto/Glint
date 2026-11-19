@@ -116,7 +116,7 @@ final class PlayerController {
             head.append("Now: \(c.title) [\(c.videoId)] \(c.isMusic ? "music" : "video")\(audioOnly ? ", audio only" : "")")
         }
         if let s = stream {
-            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.progressiveURL != nil ? ", 360p progressive" : "")")
+            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.hlsURL != nil ? ", HLS" : "")\(s.progressiveURL != nil ? ", 360p progressive" : "")")
         }
         head.append("Position \(formatTime(currentTime)) / \(formatTime(duration)), \(isPlaying ? "playing" : isBuffering ? "buffering" : "paused")\(loadError.map { ", error: \($0)" } ?? "")")
         return (head + [""] + diagnostics).joined(separator: "\n")
@@ -409,7 +409,7 @@ final class PlayerController {
     private func installItem(at time: Double) {
         guard let s = stream else { return }
         let asset: AVURLAsset
-        if s.isLive, let hls = s.hlsURL {
+        if let hls = s.hlsURL {
             if let o = selectedOption, case .hls(let vs) = o.source, let m = s.manifest {
                 asset = HLSLoader.asset(for: HLSLoader.shared.registerLive(master: m.playlist(keeping: vs)))
             } else {

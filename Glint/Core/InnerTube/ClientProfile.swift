@@ -81,6 +81,18 @@ struct ClientProfile {
         isWebPlayback: true
     )
 
+    /// yt-dlp's `web_safari`: the WEB client with a Safari user agent. Signed in, YouTube
+    /// gives it an HLS manifest with merged video + audio up to 1080p, which iOS plays natively
+    /// even when the session gets no direct adaptive links. Same token and challenges as MWEB.
+    static let webSafari = ClientProfile(
+        clientName: "WEB",
+        clientVersion: "2.20260708.00.00",
+        clientId: 1,
+        host: "www.youtube.com",
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)",
+        isWebPlayback: true
+    )
+
     static let ios = ClientProfile(
         clientName: "IOS",
         clientVersion: "20.45.3",
