@@ -136,6 +136,9 @@ struct MusicMoreMenu<MenuLabel: View>: View {
             }
             .pickerStyle(.menu)
             SleepTimerMenu()
+            Button { player.showsPlaybackInfo = true } label: {
+                Label("Playback info", systemImage: "info.circle")
+            }
         } label: {
             label()
         }
@@ -175,6 +178,9 @@ struct QualityMenu<MenuLabel: View>: View {
                 }
             } label: {
                 Label("Speed · " + (player.rate == 1 ? "Normal" : String(format: "%g×", player.rate)), systemImage: "gauge.with.dots.needle.67percent")
+            }
+            Button { player.showsPlaybackInfo = true } label: {
+                Label("Playback info", systemImage: "info.circle")
             }
         } label: {
             label()

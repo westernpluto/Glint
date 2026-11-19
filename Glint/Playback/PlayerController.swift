@@ -57,6 +57,10 @@ final class PlayerController {
     var rate: Float = 1
     var segments: [SponsorSegment] = []
     var notice: String?
+    /// Recent playback events (client used, stream checks, HTTP errors, stalls, recoveries)
+    /// for the Playback info sheet, so problems on a real connection can be diagnosed.
+    private(set) var diagnostics: [String] = []
+    var showsPlaybackInfo = false
     var highlight: SponsorSegment?
     /// Captions for the current video.
     var selectedCaption: CaptionTrack?
@@ -97,6 +101,27 @@ final class PlayerController {
     @ObservationIgnored private var lastPositionSave = Date.distantPast
     @ObservationIgnored private var prefetchedNext = false
 
+    func note(_ line: String) {
+        let stamp = Date().formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).second(.twoDigits))
+        let pos = current == nil ? "" : " @\(formatTime(currentTime))"
+        diagnostics.append("\(stamp)\(pos)  \(line)")
+        if diagnostics.count > 300 { diagnostics.removeFirst(diagnostics.count - 300) }
+    }
+
+    /// Plain-text report for copying.
+    var diagnosticsReport: String {
+        let v = Bundle.main.infoDictionary
+        var head = ["Glint \(v?["CFBundleShortVersionString"] as? String ?? "?") (\(v?["CFBundleVersion"] as? String ?? "?")), iOS \(UIDevice.current.systemVersion)"]
+        if let c = current {
+            head.append("Now: \(c.title) [\(c.videoId)] \(c.isMusic ? "music" : "video")\(audioOnly ? ", audio only" : "")")
+        }
+        if let s = stream {
+            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")")
+        }
+        head.append("Position \(formatTime(currentTime)) / \(formatTime(duration)), \(isPlaying ? "playing" : isBuffering ? "buffering" : "paused")\(loadError.map { ", error: \($0)" } ?? "")")
+        return (head + [""] + diagnostics).joined(separator: "\n")
+    }
+
     private init() {
         rate = Float(settings.playbackSpeed)
         StreamResolver.shared.codecSupported = Self.supports
@@ -105,6 +130,9 @@ final class PlayerController {
         nowPlaying = NowPlaying(controller: self)
         configureAudioSession()
 
+        StreamResolver.shared.trace = { line in
+            Task { @MainActor in PlayerController.shared.note(line) }
+        }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 4), queue: .main) { [weak self] t in
             MainActor.assumeIsolated { self?.tick(t.seconds) }
         }
@@ -133,6 +161,14 @@ final class PlayerController {
             MainActor.assumeIsolated {
                 guard let self, let item = n.object as? AVPlayerItem, item === self.player.currentItem else { return }
                 self.recover(item, message: message)
+            }
+        }
+        nc.addObserver(forName: AVPlayerItem.newErrorLogEntryNotification, object: nil, queue: .main) { [weak self] n in
+            MainActor.assumeIsolated {
+                guard let self, let item = n.object as? AVPlayerItem, item === self.player.currentItem,
+                      let e = item.errorLog()?.events.last else { return }
+                let itag = e.uri.flatMap { URLComponents(string: $0)?.queryItems?.first { $0.name == "itag" }?.value }
+                self.note("AVPlayer error \(e.errorStatusCode) \(e.errorDomain)\(itag.map { " itag \($0)" } ?? "")\(e.errorComment.map { ": \($0)" } ?? "")")
             }
         }
         nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
@@ -308,6 +344,7 @@ final class PlayerController {
         isLoading = true
         if presentation == .hidden { presentation = item.isMusic ? .mini : .expanded }
         nowPlaying.update()
+        note("Start \(item.isMusic ? "song" : "video") \(item.videoId): \(item.title)")
 
         let videoId = item.videoId
         let isMusic = item.isMusic
@@ -342,6 +379,7 @@ final class PlayerController {
                 guard !Task.isCancelled else { return }
                 self.isLoading = false
                 self.loadError = error.localizedDescription
+                self.note("Couldn't load: \(error.localizedDescription)")
             }
             let sb = await sbTask
             let ex = await extrasTask
@@ -425,6 +463,7 @@ final class PlayerController {
         guard item === player.currentItem else { return }
         switch status {
         case .readyToPlay:
+            note("Ready (\(audioOnly ? "audio only" : selectedOption?.label ?? "Auto"))")
             isLoading = false
             failures = 0          // recovered: the next failure gets the full recovery path again
             loadError = nil
@@ -441,6 +480,7 @@ final class PlayerController {
     private func recover(_ item: AVPlayerItem?, message: String?) {
         guard current != nil, item == nil || item !== recoveredItem else { return }
         recoveredItem = item
+        note("Stopped: \(message ?? "unknown") → recovery step \(failures + 1)")
         isLoading = false
         failures += 1
         let t = currentTime
@@ -521,6 +561,7 @@ final class PlayerController {
                 guard let self, !Task.isCancelled else { return }
                 self.isLoading = false
                 self.loadError = error.localizedDescription
+                self.note("Refresh failed: \(error.localizedDescription)")
             }
         }
     }

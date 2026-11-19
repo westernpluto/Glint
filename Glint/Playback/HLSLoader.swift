@@ -40,6 +40,8 @@ final class HLSLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Senda
     func register(video: [DashFormat], audio: DashFormat?, userAgent: String) -> URL {
         let id = UUID().uuidString.lowercased()
         queue.sync { store(id, Session(video: video, audio: audio, userAgent: userAgent, liveMaster: nil)) }
+        // Audio only: play the audio playlist directly, no master needed.
+        if video.isEmpty, let audio { return URL(string: "\(Self.scheme)://\(id)/a\(audio.itag).m3u8")! }
         return URL(string: "\(Self.scheme)://\(id)/master.m3u8")!
     }
 

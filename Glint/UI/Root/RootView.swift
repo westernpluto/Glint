@@ -48,6 +48,9 @@ struct RootView: View {
             .environment(\.containerSize, geo.size)
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: Binding(get: { player.showsPlaybackInfo }, set: { player.showsPlaybackInfo = $0 })) {
+            PlaybackInfoView()
+        }
         #if DEBUG
         .task { await ScreenshotDriver.run(section: section) }
         #endif

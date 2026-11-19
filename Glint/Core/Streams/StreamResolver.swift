@@ -61,6 +61,9 @@ final class StreamResolver: @unchecked Sendable {
     static let shared = StreamResolver()
     private let tube = InnerTube.shared
 
+    /// Receives a line for each resolution step (shown in Playback info).
+    var trace: (@Sendable (String) -> Void)?
+
     /// Returns true when the device can decode a codec string such as `av01.0.12M.08`.
     var codecSupported: (String) -> Bool = { _ in true }
 
@@ -129,15 +132,25 @@ final class StreamResolver: @unchecked Sendable {
         var lastReason: String?
         var limited: ResolvedStream?
         for client in orderedClients {
-            guard let json = try? await player(videoId: videoId, client: client) else { continue }
-            guard json.at("playabilityStatus.status").string == "OK" else {
-                lastReason = json.at("playabilityStatus.reason").string ?? lastReason
+            let json: JSON
+            do { json = try await player(videoId: videoId, client: client) } catch {
+                trace?("\(client.key): request failed (\(error.localizedDescription))")
                 continue
             }
-            guard var stream = await build(json, client: client) else { continue }
+            guard json.at("playabilityStatus.status").string == "OK" else {
+                lastReason = json.at("playabilityStatus.reason").string ?? lastReason
+                trace?("\(client.key): \(json.at("playabilityStatus.status").string ?? "?") \(json.at("playabilityStatus.reason").string ?? "")")
+                continue
+            }
+            guard var stream = await build(json, client: client) else {
+                trace?("\(client.key): no usable formats")
+                continue
+            }
             stream.clientKey = client.key
-            if stream.isLive || stream.hlsURL != nil { return stream }
-            if await reachesEnd(stream, userAgent: client.userAgent) { return stream }
+            if stream.isLive || stream.hlsURL != nil { trace?("\(client.key): live HLS"); return stream }
+            let check = await reachability(stream, userAgent: client.userAgent)
+            trace?("\(client.key): \(stream.options.count) qualities, audio \(stream.audio.map { "itag \($0.itag)" } ?? "none"), check \(check.description)")
+            if check.ok { return stream }
             // This client only gets the start of each file: keep looking, but remember it
             // in case nothing better turns up (better a partial play than none).
             if limited == nil { limited = stream }
@@ -200,19 +213,31 @@ final class StreamResolver: @unchecked Sendable {
         return a.bitrate > b.bitrate
     }
 
-    /// YouTube serves some clients only the first ~third of each stream and answers 403
-    /// beyond it. One tiny range request near the end of the file tells them apart.
-    /// Network trouble counts as "fine": only a definite refusal rejects a client.
-    private func reachesEnd(_ s: ResolvedStream, userAgent: String) async -> Bool {
-        guard let f = s.audio ?? s.autoFormats.last, f.contentLength > 1024 else { return true }
-        let at = f.contentLength * 9 / 10
-        var req = URLRequest(url: f.url)
-        req.setValue("bytes=\(at)-\(at + 15)", forHTTPHeaderField: "Range")
+    struct Reachability {
+        var start: Int?
+        var end: Int?
+        /// Only a definite refusal rejects a client; network trouble doesn't.
+        var ok: Bool { ![start, end].contains { $0 == 403 || $0 == 401 } }
+        var description: String { "start \(start.map(String.init) ?? "–") end \(end.map(String.init) ?? "–")" }
+    }
+
+    /// YouTube serves some clients only the first ~third of each stream (or nothing) and
+    /// answers 403 beyond that. Two tiny range requests, at the start and near the end of
+    /// the file, tell them apart.
+    private func reachability(_ s: ResolvedStream, userAgent: String) async -> Reachability {
+        guard let f = s.audio ?? s.autoFormats.last, f.contentLength > 1024 else { return Reachability() }
+        async let start = status(f.url, at: 0, userAgent: userAgent)
+        async let end = status(f.url, at: f.contentLength * 9 / 10, userAgent: userAgent)
+        return await Reachability(start: start, end: end)
+    }
+
+    private func status(_ url: URL, at offset: Int, userAgent: String) async -> Int? {
+        var req = URLRequest(url: url)
+        req.setValue("bytes=\(offset)-\(offset + 15)", forHTTPHeaderField: "Range")
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 6
-        guard let (_, resp) = try? await tube.session.data(for: req),
-              let code = (resp as? HTTPURLResponse)?.statusCode else { return true }
-        return code != 403 && code != 401
+        guard let (_, resp) = try? await tube.session.data(for: req) else { return nil }
+        return (resp as? HTTPURLResponse)?.statusCode
     }
 
     // MARK: Requests
