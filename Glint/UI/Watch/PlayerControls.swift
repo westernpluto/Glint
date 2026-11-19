@@ -171,14 +171,25 @@ struct PlayerOverlay: View {
             }
 
             if let err = player.loadError {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.title2)
-                    Text(err).font(.subheadline).multilineTextAlignment(.center)
-                    Button("Retry") { player.retry() }
-                        .buttonStyle(.borderedProminent)
+                VStack(spacing: 14) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.hierarchical)
+                    Text(err)
+                        .font(.subheadline.weight(.medium))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                    Button { player.retry() } label: {
+                        Label("Try again", systemImage: "arrow.clockwise")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .foregroundStyle(.white)
                 .padding(24)
+                .frame(maxWidth: 360)
             }
 
             VStack {
@@ -259,6 +270,7 @@ struct PlayerOverlay: View {
 
                 Spacer()
 
+                if player.loadError == nil {
                 GlassEffectContainer(spacing: 24) {
                     HStack(spacing: fullscreen ? 40 : 28) {
                         transport("backward.end.fill", size: 46, label: "Previous") { player.previous() }
@@ -274,6 +286,7 @@ struct PlayerOverlay: View {
                         .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                         transport("forward.end.fill", size: 46, label: "Next") { player.next(); scheduleHide() }
                     }
+                }
                 }
 
                 Spacer()

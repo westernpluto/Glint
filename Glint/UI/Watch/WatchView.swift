@@ -330,7 +330,7 @@ struct WatchDetails: View {
                             liked = now
                             Task { try? await YouTubeService.shared.rate(id, now ? .like : .none) }
                         } label: {
-                            Label(player.extras?.likeCount ?? "Like", systemImage: liked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                            pill(player.extras?.likeCount ?? "Like", liked ? "hand.thumbsup.fill" : "hand.thumbsup")
                         }
                         .sensoryFeedback(.impact(weight: .light), trigger: liked)
                         Button {
@@ -338,36 +338,34 @@ struct WatchDetails: View {
                                 try? await YouTubeService.shared.saveToWatchLater(id)
                                 player.flash("Saved to Watch later")
                             }
-                        } label: { Label("Save", systemImage: "clock") }
+                        } label: { pill("Save", "clock") }
                     } else if let likes = player.extras?.likeCount {
-                        Label(likes, systemImage: "hand.thumbsup")
-                            .padding(.horizontal, 14).padding(.vertical, 9)
-                            .glassEffect(.regular, in: .capsule)
+                        pill(likes, "hand.thumbsup", interactive: false)
                     }
                     QualityMenu {
-                        Label(player.audioOnly ? "Audio" : (player.selectedOption?.label ?? "Auto"),
-                              systemImage: "slider.horizontal.3")
-                            .padding(.horizontal, 14).padding(.vertical, 9)
-                            .glassEffect(.regular.interactive(), in: .capsule)
+                        pill(player.audioOnly ? "Audio" : (player.selectedOption?.label ?? "Auto"), "slider.horizontal.3")
                     }
                     Button { player.setAudioOnly(!player.audioOnly) } label: {
-                        Label(player.audioOnly ? "Video" : "Audio only",
-                              systemImage: player.audioOnly ? "play.rectangle" : "headphones")
+                        pill(player.audioOnly ? "Video" : "Audio only", player.audioOnly ? "play.rectangle" : "headphones")
                     }
                     if let id = player.current?.videoId, let url = URL(string: "https://youtu.be/\(id)") {
-                        ShareLink(item: url) {
-                            Label("Share", systemImage: "square.and.arrow.up")
-                                .padding(.horizontal, 14).padding(.vertical, 9)
-                                .glassEffect(.regular.interactive(), in: .capsule)
-                        }
+                        ShareLink(item: url) { pill("Share", "square.and.arrow.up") }
                     }
                 }
-                .buttonStyle(.glass)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.primary)
+                .buttonStyle(.plain)
             }
         }
         .scrollClipDisabled()
+    }
+
+    /// One shape, size and material for every action so the row reads as a set.
+    private func pill(_ title: String, _ icon: String, interactive: Bool = true) -> some View {
+        Label(title, systemImage: icon)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .frame(height: 38)
+            .glassEffect(interactive ? .regular.interactive() : .regular, in: .capsule)
     }
 
     private func description(_ text: String) -> some View {

@@ -1,73 +1,72 @@
 #!/usr/bin/env bash
-# Captures simulator screenshots of the main screens for design review.
+# Captures iPhone Duo simulator screenshots of the main screens on both displays.
 # Usage: scripts/screenshots.sh <path-to-Glint.app> <output-dir>
 set -uo pipefail
 APP="$1"; OUT="$2"
 BUNDLE="com.glint.Glint"
 mkdir -p "$OUT"
+LOG="$OUT/log.txt"
+# macOS has no `timeout`; perl's alarm gives every simulator call a hard limit.
+t() { local secs="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$secs" "$@"; }
+note() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
-xcrun simctl list devicetypes > "$OUT/devicetypes.txt"
-xcrun simctl list runtimes > "$OUT/runtimes.txt"
-xcrun simctl help > "$OUT/simctl-help.txt" 2>&1 || true
-xcrun simctl io help > "$OUT/simctl-io-help.txt" 2>&1 || true
+t 60 xcrun simctl list devicetypes > "$OUT/devicetypes.txt" 2>&1 || true
+t 60 xcrun simctl list runtimes > "$OUT/runtimes.txt" 2>&1 || true
 
-RUNTIME=$(xcrun simctl list runtimes -j | python3 -c '
+DEVICE_TYPE="${DEVICE_TYPE:-com.apple.CoreSimulator.SimDeviceType.iPhone-Duo}"
+# Newest runtimes first (device-specific ones included); use the first that accepts the device.
+RUNTIMES=$(t 60 xcrun simctl list runtimes -j | python3 -c '
 import json, sys
 rs = [r for r in json.load(sys.stdin)["runtimes"] if r.get("platform") == "iOS" and r.get("isAvailable")]
-rs.sort(key=lambda r: [int(x) for x in r["version"].split(".")])
-print(rs[-1]["identifier"] if rs else "")')
-echo "Runtime: $RUNTIME"
-[ -n "$RUNTIME" ] || { echo "No iOS simulator runtime"; exit 0; }
+rs.sort(key=lambda r: ([int(x) for x in r["version"].split(".")], len(r["identifier"])), reverse=True)
+print("\n".join(r["identifier"] for r in rs))')
 
-# Device types: every iPhone Duo variant, plus the newest regular iPhone.
-xcrun simctl list devicetypes -j | python3 -c '
-import json, sys
-ts = [t for t in json.load(sys.stdin)["devicetypes"] if t.get("productFamily") == "iPhone"]
-duo = [t for t in ts if "duo" in t["name"].lower()]
-for t in duo: print("duo|" + t["identifier"])
-pro = [t for t in ts if "duo" not in t["name"].lower() and "Pro" in t["name"] and "Max" not in t["name"]]
-if pro: print("iphone|" + pro[-1]["identifier"])
-' > "$OUT/targets.txt"
-cat "$OUT/targets.txt"
+UDID=""
+for rt in $RUNTIMES; do
+  UDID=$(t 60 xcrun simctl create "glint-duo" "$DEVICE_TYPE" "$rt" 2>>"$LOG") && { note "created on $rt"; break; }
+  note "runtime $rt rejected $DEVICE_TYPE"
+  UDID=""
+done
+[ -n "$UDID" ] || { note "could not create $DEVICE_TYPE"; exit 0; }
 
-SCENES="home watch nowplaying music search mini library"
+t 120 xcrun simctl boot "$UDID" || note "boot returned an error"
+t 300 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || note "bootstatus timed out"
+t 30 xcrun simctl io "$UDID" enumerate > "$OUT/enumerate.txt" 2>&1 || true
+t 30 xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3 >/dev/null 2>&1 || true
+t 30 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
+t 120 xcrun simctl install "$UDID" "$APP" || { note "install failed"; exit 0; }
 
-capture() {
-  local tag="$1" dtype="$2"
-  local udid
-  udid=$(xcrun simctl create "glint-$tag" "$dtype" "$RUNTIME") || { echo "create failed for $dtype"; return; }
-  xcrun simctl boot "$udid"
-  xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || true
-  xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3 >/dev/null 2>&1 || true
-  xcrun simctl ui "$udid" appearance light >/dev/null 2>&1 || true
-  xcrun simctl install "$udid" "$APP"
-  for scene in $SCENES; do
-    xcrun simctl terminate "$udid" "$BUNDLE" >/dev/null 2>&1 || true
-    xcrun simctl launch "$udid" "$BUNDLE" -GlintScene "$scene" -GlintQuery "4k nature" >/dev/null
-    sleep 16
-    xcrun simctl io "$udid" screenshot "$OUT/$tag-$scene.png" >/dev/null 2>&1 || echo "screenshot failed: $tag $scene"
-    # Duo has two displays; try capturing every display the simulator exposes.
-    for d in internal external; do
-      xcrun simctl io "$udid" screenshot --display="$d" "$OUT/$tag-$scene-$d.png" >/dev/null 2>&1 || true
-    done
+shoot() {  # name
+  local any=0
+  for d in 1 2; do
+    if t 30 xcrun simctl io "$UDID" screenshot --display="$d" "$OUT/$1-d$d.png" >/dev/null 2>>"$LOG"; then any=1; fi
   done
-  # Dark appearance of the most important screens.
-  xcrun simctl ui "$udid" appearance dark >/dev/null 2>&1 || true
-  for scene in home watch; do
-    xcrun simctl terminate "$udid" "$BUNDLE" >/dev/null 2>&1 || true
-    xcrun simctl launch "$udid" "$BUNDLE" -GlintScene "$scene" >/dev/null
-    sleep 14
-    xcrun simctl io "$udid" screenshot "$OUT/$tag-$scene-dark.png" >/dev/null 2>&1 || true
-  done
-  xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
-  xcrun simctl delete "$udid" >/dev/null 2>&1 || true
+  if [ "$any" = 0 ]; then t 30 xcrun simctl io "$UDID" screenshot "$OUT/$1.png" >/dev/null 2>>"$LOG" || true; fi
+  note "shot $1"
 }
 
-n=0
-while IFS='|' read -r kind ident; do
-  [ -n "$ident" ] || continue
-  n=$((n + 1))
-  capture "$kind$n" "$ident"
-done < "$OUT/targets.txt"
+power() {  # display on|off
+  t 30 xcrun simctl io "$UDID" screenConfig --display="$1" power "$2" >>"$LOG" 2>&1 || note "power $1 $2 failed"
+}
 
+for scene in home watch nowplaying music search mini; do
+  t 20 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
+  t 60 xcrun simctl launch "$UDID" "$BUNDLE" -GlintScene "$scene" -GlintQuery "4k nature" >/dev/null || note "launch failed: $scene"
+  sleep 16
+  shoot "$scene-A"
+  # Simulate folding/unfolding: swap which display is powered, then restore.
+  power 1 off; power 2 on; sleep 6; shoot "$scene-B"
+  power 2 off; power 1 on; sleep 6; shoot "$scene-C"
+  power 2 on
+done
+
+t 30 xcrun simctl ui "$UDID" appearance dark >/dev/null 2>&1 || true
+t 20 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
+t 60 xcrun simctl launch "$UDID" "$BUNDLE" -GlintScene home >/dev/null || true
+sleep 14
+shoot "home-dark"
+
+t 30 xcrun simctl io "$UDID" enumerate > "$OUT/enumerate-end.txt" 2>&1 || true
+t 60 xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
+t 60 xcrun simctl delete "$UDID" >/dev/null 2>&1 || true
 ls -la "$OUT"

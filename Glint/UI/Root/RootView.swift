@@ -131,14 +131,15 @@ enum ScreenshotDriver {
             section.wrappedValue = .search
         case "watch":
             let id = d.string(forKey: "GlintVideo") ?? "aqz-KE-bpKQ"
-            PlayerController.shared.play(VideoItem(id: id, title: ""))
+            PlayerController.shared.play(VideoItem(id: id, title: "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film",
+                                                   channelName: "Blender"))
         case "nowplaying":
             let id = d.string(forKey: "GlintVideo") ?? "FGBhQbmPwH8"
-            PlayerController.shared.playMusic(MusicItem(kind: .song, title: "", videoId: id))
+            PlayerController.shared.playMusic(MusicItem(kind: .song, title: "One More Time", subtitle: "Daft Punk", videoId: id))
             PlayerController.shared.presentation = .expanded
         case "mini":
             let id = d.string(forKey: "GlintVideo") ?? "aqz-KE-bpKQ"
-            PlayerController.shared.play(VideoItem(id: id, title: ""))
+            PlayerController.shared.play(VideoItem(id: id, title: "Big Buck Bunny 60fps 4K", channelName: "Blender"))
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             PlayerController.shared.presentation = .mini
         default: section.wrappedValue = .home
