@@ -167,8 +167,14 @@ final class PlayerController {
             MainActor.assumeIsolated {
                 guard let self, let item = n.object as? AVPlayerItem, item === self.player.currentItem,
                       let e = item.errorLog()?.events.last else { return }
-                let itag = e.uri.flatMap { URLComponents(string: $0)?.queryItems?.first { $0.name == "itag" }?.value }
-                self.note("AVPlayer error \(e.errorStatusCode) \(e.errorDomain)\(itag.map { " itag \($0)" } ?? "")\(e.errorComment.map { ": \($0)" } ?? "")")
+                let itag = e.uri.flatMap { u -> String? in
+                    if let q = URLComponents(string: u)?.queryItems?.first(where: { $0.name == "itag" })?.value { return q }
+                    let parts = u.split(separator: "/")   // HLS links carry it in the path: …/itag/96/…
+                    guard let i = parts.firstIndex(of: "itag"), i + 1 < parts.count else { return nil }
+                    return String(parts[i + 1])
+                }
+                let kind = e.uri.map { $0.contains("/api/manifest/") ? " playlist" : $0.contains("videoplayback") ? " segment" : "" } ?? ""
+                self.note("AVPlayer error \(e.errorStatusCode) \(e.errorDomain)\(itag.map { " itag \($0)" } ?? "")\(kind)\(e.errorComment.map { ": \($0)" } ?? "")")
             }
         }
         nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
@@ -412,6 +418,9 @@ final class PlayerController {
         if let hls = s.hlsURL {
             if let o = selectedOption, case .hls(let vs) = o.source, let m = s.manifest {
                 asset = HLSLoader.asset(for: HLSLoader.shared.registerLive(master: m.playlist(keeping: vs)))
+            } else if !s.isLive, let m = s.manifest {
+                // Regular video: the checked manifest (qualities YouTube refused are left out).
+                asset = HLSLoader.asset(for: HLSLoader.shared.registerLive(master: m.playlist(keeping: m.variants)))
             } else {
                 asset = AVURLAsset(url: hls)
             }

@@ -247,6 +247,59 @@ final class StreamResolver: @unchecked Sendable {
         throw InnerTubeError.unplayable(lastReason ?? "This video can't be played right now.")
     }
 
+    /// Fetches each variant's and audio track's playlist and the first bytes of its first
+    /// segment; drops what YouTube refuses (and variants whose audio group lost every track).
+    private func validated(_ m: HLSManifest, client: ClientProfile) async -> HLSManifest {
+        let ua = client.userAgent
+        let variants = m.variants.filter { codecSupported($0.videoCodec) }
+        let media = m.headerLines.enumerated().compactMap { i, line -> (Int, URL)? in
+            guard line.hasPrefix("#EXT-X-MEDIA"), let u = HLSManifest.attributes(String(line.drop { $0 != ":" }.dropFirst()))["URI"],
+                  let url = URL(string: u) else { return nil }
+            return (i, url)
+        }
+        var variantOK: [Int: Bool] = [:], mediaOK: [Int: Bool] = [:]
+        await withTaskGroup(of: (Bool, Int, Bool).self) { group in
+            for (i, v) in variants.enumerated() {
+                group.addTask { (true, i, await self.hlsPlaylistServes(v.uri, userAgent: ua)) }
+            }
+            for (i, url) in media {
+                group.addTask { (false, i, await self.hlsPlaylistServes(url, userAgent: ua)) }
+            }
+            for await (isVariant, i, ok) in group {
+                if isVariant { variantOK[i] = ok } else { mediaOK[i] = ok }
+            }
+        }
+
+        var out = m
+        let groupOf: (String) -> String? = { HLSManifest.attributes(String($0.drop { $0 != ":" }.dropFirst()))["GROUP-ID"] }
+        let allGroups = Set(media.compactMap { groupOf(m.headerLines[$0.0]) })
+        out.headerLines = m.headerLines.enumerated().filter { mediaOK[$0.offset] != false }.map { $0.element }
+        let liveGroups = Set(out.headerLines.filter { $0.hasPrefix("#EXT-X-MEDIA") }.compactMap(groupOf))
+        out.variants = variants.enumerated().filter { i, v in
+            guard variantOK[i] != false else { return false }
+            guard let g = HLSManifest.attributes(v.attributes)["AUDIO"], allGroups.contains(g) else { return true }
+            return liveGroups.contains(g)
+        }.map { $0.element }
+        trace?("\(client.key): HLS check \(out.variants.count)/\(variants.count) qualities, \(mediaOK.values.filter { $0 }.count)/\(media.count) audio tracks served")
+        return out
+    }
+
+    /// The playlist loads and its first segment answers (network trouble counts as fine,
+    /// only a refusal fails).
+    private func hlsPlaylistServes(_ url: URL, userAgent: String) async -> Bool {
+        var req = URLRequest(url: url)
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 6
+        guard let (data, resp) = try? await tube.session.data(for: req),
+              let code = (resp as? HTTPURLResponse)?.statusCode else { return true }
+        guard (200..<300).contains(code) else { return false }
+        let text = String(decoding: data, as: UTF8.self)
+        guard let line = text.split(whereSeparator: \.isNewline).first(where: { !$0.hasPrefix("#") && !$0.isEmpty }),
+              let seg = URL(string: String(line), relativeTo: url)?.absoluteURL else { return true }
+        let status = await status(seg, at: 0, userAgent: userAgent).code
+        return status != 403 && status != 401
+    }
+
     private static func isBotCheck(_ reason: String?) -> Bool {
         guard let r = reason?.lowercased() else { return false }
         return r.contains("not a bot") || (r.contains("sign in") && r.contains("confirm"))
@@ -265,7 +318,10 @@ final class StreamResolver: @unchecked Sendable {
         if details.isLive || formats.isEmpty,
            let s = sd["hlsManifestUrl"].string, let url = URL(string: s) {
             if let text = try? await fetchText(url, userAgent: client.userAgent) {
-                let m = HLSManifest(text: text, baseURL: url)
+                var m = HLSManifest(text: text, baseURL: url)
+                // Regular videos: YouTube may refuse some of the qualities or audio tracks in
+                // the manifest (403), so only those that answer are kept.
+                if !details.isLive { m = await validated(m, client: client) }
                 if !m.variants.isEmpty {
                     return ResolvedStream(details: details, options: hlsOptions(m), hlsURL: url, manifest: m,
                                           audio: nil, streamUserAgent: client.userAgent, isLive: details.isLive,
