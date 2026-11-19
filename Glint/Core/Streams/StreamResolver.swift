@@ -64,7 +64,40 @@ final class StreamResolver: @unchecked Sendable {
     /// Clients tried in order. ANDROID_VR returns direct URLs without proof-of-origin tokens.
     var clients: [ClientProfile] = [.androidVR, .ios]
 
+    // Stream URLs stay valid for hours; reuse a resolution for a while so replays,
+    // quality changes after a relaunch of the item and "back to this video" are instant.
+    private let cacheLock = NSLock()
+    private var cache: [String: (stream: ResolvedStream, at: Date)] = [:]
+    private let cacheLifetime: TimeInterval = 20 * 60
+
+    func invalidate(_ videoId: String) {
+        cacheLock.withLock { cache[videoId] = nil }
+    }
+
+    private func cached(_ videoId: String) -> ResolvedStream? {
+        cacheLock.withLock {
+            guard let hit = cache[videoId], Date().timeIntervalSince(hit.at) < cacheLifetime else { return nil }
+            return hit.stream
+        }
+    }
+
+    private func store(_ stream: ResolvedStream, for videoId: String) {
+        cacheLock.withLock {
+            let now = Date()
+            cache = cache.filter { now.timeIntervalSince($0.value.at) < cacheLifetime }
+            if cache.count >= 40, let oldest = cache.min(by: { $0.value.at < $1.value.at })?.key { cache[oldest] = nil }
+            cache[videoId] = (stream, now)
+        }
+    }
+
     func resolve(videoId: String) async throws -> ResolvedStream {
+        if let hit = cached(videoId) { return hit }
+        let stream = try await resolveFresh(videoId: videoId)
+        if !stream.isLive { store(stream, for: videoId) }
+        return stream
+    }
+
+    private func resolveFresh(videoId: String) async throws -> ResolvedStream {
         var lastReason: String?
         for client in clients {
             guard let json = try? await player(videoId: videoId, client: client) else { continue }

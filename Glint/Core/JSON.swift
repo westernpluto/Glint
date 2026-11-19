@@ -13,12 +13,13 @@ enum JSON: Decodable, Hashable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if c.decodeNil() { self = .null }
-        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
-        else if let n = try? c.decode(Double.self) { self = .number(n) }
+        // Ordered by how common each type is in InnerTube responses: every failed
+        // attempt throws internally, so trying the likely types first is much faster.
+        if let o = try? c.decode([String: JSON].self) { self = .object(o) }
         else if let s = try? c.decode(String.self) { self = .string(s) }
         else if let a = try? c.decode([JSON].self) { self = .array(a) }
-        else if let o = try? c.decode([String: JSON].self) { self = .object(o) }
+        else if let n = try? c.decode(Double.self) { self = .number(n) }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
         else { self = .null }
     }
 
@@ -127,10 +128,11 @@ enum JSON: Decodable, Hashable {
     private func collect(_ key: String, _ blocked: Set<String>, _ out: inout [JSON]) {
         switch self {
         case .object(let o):
-            // Preserve document order as much as a dictionary allows: handle the
-            // matched key, then recurse into the rest.
+            // Handle the matched key first, then recurse into every child —
+            // including the matched value, since YouTube nests same-named keys
+            // (e.g. `content` inside `content`).
             if let v = o[key] { out.append(v) }
-            for (k, v) in o where k != key && !blocked.contains(k) {
+            for (k, v) in o where !blocked.contains(k) {
                 v.collect(key, blocked, &out)
             }
         case .array(let a):

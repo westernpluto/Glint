@@ -174,7 +174,7 @@ struct PlayerOverlay: View {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.title2)
                     Text(err).font(.subheadline).multilineTextAlignment(.center)
-                    Button("Retry") { player.playQueue(at: player.index) }
+                    Button("Retry") { player.retry() }
                         .buttonStyle(.borderedProminent)
                 }
                 .foregroundStyle(.white)

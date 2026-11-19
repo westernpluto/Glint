@@ -6,8 +6,8 @@ struct HomeView: View {
 
     var body: some View {
         FeedScreen(reloadKey: "\(accounts.generation)-\(settings.hideShorts)",
-                   emptyTitle: "Your feed is empty",
-                   emptyIcon: "house") {
+                   emptyTitle: accounts.isSignedIn ? "Your feed is empty" : "Search to get started",
+                   emptyIcon: accounts.isSignedIn ? "house" : "magnifyingglass") {
             try await YouTubeService.shared.home()
         } header: {
             if !accounts.isSignedIn {

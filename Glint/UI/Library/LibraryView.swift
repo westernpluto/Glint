@@ -4,6 +4,7 @@ struct LibraryView: View {
     @Environment(AccountStore.self) private var accounts
     @Environment(\.screenClass) private var screen
     @State private var playlists: [PlaylistItem] = []
+    @State private var loadedGeneration: Int?
 
     var body: some View {
         Group {
@@ -24,7 +25,9 @@ struct LibraryView: View {
                     .padding(.vertical, 12)
                 }
                 .task(id: accounts.generation) {
+                    if loadedGeneration == accounts.generation { return }
                     playlists = (try? await YouTubeService.shared.libraryPlaylists()) ?? []
+                    loadedGeneration = accounts.generation
                 }
                 .refreshable {
                     playlists = (try? await YouTubeService.shared.libraryPlaylists()) ?? playlists

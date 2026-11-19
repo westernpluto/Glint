@@ -20,6 +20,9 @@ final class HLSLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Senda
     private var sessions: [String: Session] = [:]
     private var order: [String] = []
     private var cache: [String: String] = [:]
+    /// Media playlists by stream URL, shared across sessions so quality switches skip the index fetch.
+    private var mediaCache: [String: String] = [:]
+    private var mediaOrder: [String] = []
 
     private static let playlistUTI = UTType(mimeType: "application/vnd.apple.mpegurl")?.identifier
         ?? "public.m3u-playlist"
@@ -94,6 +97,13 @@ final class HLSLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Senda
         let format = isAudio ? (s.audio?.itag == itag ? s.audio : nil) : s.video.first { $0.itag == itag }
         guard let format else { return false }
 
+        let mediaKey = format.url.absoluteString
+        if let text = mediaCache[mediaKey] {
+            cache[key] = text
+            respond(loadingRequest, text)
+            return true
+        }
+
         let ua = s.userAgent
         let urlSession = session
         Task {
@@ -102,6 +112,9 @@ final class HLSLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Senda
                 let text = SyntheticHLS.mediaPlaylist(format, segments: segs)
                 self.queue.async {
                     self.cache[key] = text
+                    self.mediaCache[mediaKey] = text
+                    self.mediaOrder.append(mediaKey)
+                    while self.mediaOrder.count > 24 { self.mediaCache[self.mediaOrder.removeFirst()] = nil }
                     self.respond(loadingRequest, text)
                 }
             } catch {

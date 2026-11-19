@@ -75,7 +75,8 @@ struct VideoBox: View {
     }
 
     private func toggleFullscreen() {
-        let goingFull = !player.isFullscreen
+        // `fullscreen` is what is on screen now (it can be automatic in landscape).
+        let goingFull = !fullscreen
         withAnimation(.easeInOut(duration: 0.25)) { player.isFullscreen = goingFull }
         if screen == .compact {
             Orientation.request(goingFull ? .landscape : .portrait)
@@ -235,6 +236,7 @@ struct WatchDetails: View {
             }
         }
         .onChange(of: player.current?.videoId) { _, _ in expanded = false; liked = false }
+        .onChange(of: player.extras?.isLiked) { _, v in liked = v ?? false }
     }
 
     private var meta: String {

@@ -7,9 +7,9 @@ struct FeedGrid: View {
     @Environment(\.screenClass) private var screen
 
     var body: some View {
-        let columns = screen == .expanded
-            ? [GridItem(.adaptive(minimum: Metrics.gridMinimum(screen)), spacing: 20, alignment: .top)]
-            : [GridItem(.flexible(), alignment: .top)]
+        // Adaptive everywhere: 1 column on the cover screen in portrait, 2 in landscape,
+        // 2–4 on the inner screen depending on orientation.
+        let columns = [GridItem(.adaptive(minimum: Metrics.gridMinimum(screen)), spacing: 20, alignment: .top)]
         LazyVGrid(columns: columns, alignment: .leading, spacing: screen == .expanded ? 28 : 22) {
             ForEach(items) { item in
                 switch item {
@@ -38,6 +38,7 @@ struct FeedScreen<Header: View>: View {
     @State private var loading = false
     @State private var loadingMore = false
     @State private var loaded = false
+    @State private var loadedKey: AnyHashable?
 
     var body: some View {
         ScrollView {
@@ -45,11 +46,12 @@ struct FeedScreen<Header: View>: View {
                 header()
                 FeedGrid(items: items)
                     .padding(.top, 8)
-                if continuation != nil {
+                if let token = continuation {
                     ProgressView()
                         .frame(maxWidth: .infinity)
                         .padding(28)
-                        .onAppear { Task { await loadMore() } }
+                        // Keyed by token: fires again for each new page, even if the spinner never left the screen.
+                        .task(id: token) { await loadMore() }
                 }
             }
             .padding(.bottom, 24)
@@ -64,23 +66,31 @@ struct FeedScreen<Header: View>: View {
             }
         }
         .refreshable { await reload() }
-        .task(id: reloadKey) { await reload() }
+        .task(id: reloadKey) {
+            // Returning to a screen (back navigation, tab switch) keeps what is already loaded.
+            if loadedKey == reloadKey, !items.isEmpty { return }
+            if loadedKey != reloadKey { items = []; continuation = nil; error = nil; loaded = false }
+            await reload()
+        }
     }
 
     private func reload() async {
         loading = true
-        defer { loading = false; loaded = true }
+        defer { loading = false }
         do {
             let page = try await load()
             items = page.items
             continuation = page.continuation
             error = nil
+            loadedKey = reloadKey
+            loaded = true
         } catch is CancellationError {
         } catch {
             if (error as? URLError)?.code == .cancelled { return }
             self.error = error
             items = []
             continuation = nil
+            loaded = true
         }
     }
 

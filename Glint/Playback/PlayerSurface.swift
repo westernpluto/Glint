@@ -38,12 +38,21 @@ struct PlayerSurface: UIViewRepresentable {
     final class Coordinator: NSObject, AVPictureInPictureControllerDelegate {
         var pip: AVPictureInPictureController?
 
+        func pictureInPictureControllerWillStartPictureInPicture(_ c: AVPictureInPictureController) {
+            // Synchronous: backgrounding checks this flag right after.
+            MainActor.assumeIsolated { PlayerController.shared.isPiPActive = true }
+        }
+
         func pictureInPictureControllerDidStartPictureInPicture(_ c: AVPictureInPictureController) {
-            Task { @MainActor in PlayerController.shared.isPiPActive = true }
+            MainActor.assumeIsolated { PlayerController.shared.isPiPActive = true }
+        }
+
+        func pictureInPictureController(_ c: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+            MainActor.assumeIsolated { PlayerController.shared.isPiPActive = false }
         }
 
         func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
-            Task { @MainActor in PlayerController.shared.isPiPActive = false }
+            MainActor.assumeIsolated { PlayerController.shared.isPiPActive = false }
         }
 
         func pictureInPictureController(_ c: AVPictureInPictureController,

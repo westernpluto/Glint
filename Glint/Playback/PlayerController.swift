@@ -142,9 +142,15 @@ final class PlayerController {
     // MARK: Starting playback
 
     func play(_ video: VideoItem) {
+        // Tapping what is already playing just brings the watch page back.
+        if current?.videoId == video.id, loadError == nil {
+            presentation = .expanded
+            return
+        }
         queue = [QueueItem(video: video)]
         index = 0
         audioOnly = false
+        presentation = .expanded
         start()
     }
 
@@ -154,6 +160,7 @@ final class PlayerController {
         queue = videos.map(QueueItem.init(video:))
         index = i
         audioOnly = false
+        presentation = .expanded
         start()
     }
 
@@ -194,6 +201,12 @@ final class PlayerController {
     func playQueue(at i: Int) {
         guard queue.indices.contains(i) else { return }
         index = i
+        start()
+    }
+
+    /// Re-resolves the current item from scratch (fresh stream URLs).
+    func retry() {
+        if let id = current?.videoId { StreamResolver.shared.invalidate(id) }
         start()
     }
 
@@ -489,7 +502,9 @@ final class PlayerController {
     func detach(_ layer: AVPlayerLayer) { layers.remove(layer) }
 
     private func enteredBackground() {
-        guard current != nil, !isPiPActive else { return }
+        // Leave the layer alone while Picture in Picture is running or about to start automatically.
+        let pipStarting = pip.map { $0.isPictureInPictureActive || ($0.canStartPictureInPictureAutomaticallyFromInline && $0.isPictureInPicturePossible && isPlaying) } ?? false
+        guard current != nil, !isPiPActive, !pipStarting else { return }
         if settings.backgroundPlayback || audioOnly {
             // Detaching video layers lets audio continue in the background.
             for l in layers.allObjects { l.player = nil }

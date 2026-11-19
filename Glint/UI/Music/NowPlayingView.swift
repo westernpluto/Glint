@@ -14,8 +14,15 @@ struct NowPlayingView: View {
             backdrop
             if sideBySide {
                 HStack(spacing: 0) {
-                    playerColumn(showQueueButton: false)
-                        .frame(maxWidth: .infinity)
+                    Group {
+                        if size.height < 500 {
+                            // Cover screen in landscape: too short for the full stack.
+                            ScrollView { playerColumn(showQueueButton: false).padding(.top, 8) }
+                        } else {
+                            playerColumn(showQueueButton: false)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
                     QueueList()
                         .frame(width: min(max(size.width * 0.4, 320), 460))
                         .background(.ultraThinMaterial)

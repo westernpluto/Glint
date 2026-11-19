@@ -145,7 +145,8 @@ final class YouTubeService: @unchecked Sendable {
         let owner = results.first("videoOwnerRenderer") ?? .null
         let primary = results.first("videoPrimaryInfoRenderer") ?? .null
         let related = Parser.feed(results["secondaryResults"], hideShorts: true)
-        let subscribed = results.first("subscribeButtonRenderer")?["subscribed"].bool
+        let subscribed = results.first("videoSecondaryInfoRenderer")?["subscribeButton"].first("subscribeState")?["subscribed"].bool
+            ?? results.first("subscribeButtonRenderer")?["subscribed"].bool
             ?? json.findAll("subscribeButtonViewModel").first.flatMap { _ in
                 json.findAll("subscriptionStateEntity").first?["subscribed"].bool
             }
@@ -158,6 +159,7 @@ final class YouTubeService: @unchecked Sendable {
             channelAvatar: avatar,
             subscriberCount: subs,
             isSubscribed: subscribed,
+            isLiked: json.findAll("likeStatusEntity").first?["likeStatus"].string.map { $0 == "LIKE" },
             likeCount: likes,
             dateText: primary["dateText"].text ?? primary["relativeDateText"].text,
             related: related.items.compactMap(\.video),

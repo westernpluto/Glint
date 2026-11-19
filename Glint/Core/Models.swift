@@ -77,6 +77,7 @@ struct WatchExtras {
     var channelAvatar: URL?
     var subscriberCount: String?
     var isSubscribed: Bool?
+    var isLiked: Bool?
     var likeCount: String?
     var dateText: String?
     var related: [VideoItem]
@@ -112,11 +113,11 @@ struct MusicShelf: Identifiable, Hashable {
 }
 
 struct MusicPage {
-    var title: String?
-    var subtitle: String?
-    var thumbnail: URL?
+    var title: String? = nil
+    var subtitle: String? = nil
+    var thumbnail: URL? = nil
     var shelves: [MusicShelf]
-    var playlistId: String?
+    var playlistId: String? = nil
 }
 
 // MARK: Library
