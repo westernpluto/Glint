@@ -1,0 +1,100 @@
+name: Build iOS app
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Glint (Xcode 27)
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 27
+        run: |
+          set -euo pipefail
+          XC=""
+          for c in /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode27*.app /Applications/Xcode.app; do
+            if [ -d "$c" ] && "$c/Contents/Developer/usr/bin/xcodebuild" -version | grep -q "^Xcode 27"; then XC="$c"; fi
+          done
+          if [ -z "$XC" ]; then
+            echo "::warning::No Xcode 27 found in /Applications, using the runner default"
+            XC="$(dirname "$(dirname "$(xcode-select -p)")")"
+          fi
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$XC/Contents/Developer" xcodebuild -version
+          DEVELOPER_DIR="$XC/Contents/Developer" xcodebuild -showsdks | grep -i iphoneos || true
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          if command -v xcodegen >/dev/null 2>&1; then
+            xcodegen --version; exit 0
+          fi
+          if command -v brew >/dev/null 2>&1 && brew install xcodegen; then
+            xcodegen --version; exit 0
+          fi
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip
+          unzip -q -o "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP/xcodegen"
+          BIN="$(dirname "$(find "$RUNNER_TEMP/xcodegen" -type f -name xcodegen -perm -u+x | head -n1)")"
+          echo "$BIN" >> "$GITHUB_PATH"
+          "$BIN/xcodegen" --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build (unsigned, device)
+        run: |
+          set +e
+          xcodebuild \
+            -project Glint.xcodeproj \
+            -scheme Glint \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build > build.log 2>&1
+          STATUS=$?
+          set -e
+          grep -E "error:|\*\* BUILD" build.log || true
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::group::Last 200 lines of build log"; tail -n 200 build.log; echo "::endgroup::"
+            exit "$STATUS"
+          fi
+
+      - name: Package .ipa
+        run: |
+          set -euo pipefail
+          APP="build/Build/Products/Release-iphoneos/Glint.app"
+          test -d "$APP"
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry Glint.ipa Payload
+          ls -lh Glint.ipa
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Glint-ipa
+          path: Glint.ipa
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore

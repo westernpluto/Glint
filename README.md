@@ -1,0 +1,67 @@
+# Glint
+
+A minimal, ad-free YouTube + YouTube Music client for iPhone, designed for foldable iPhones: a phone layout on the cover screen and a tablet-class layout on the inner screen.
+
+## Features
+
+- **Every resolution**: 144p up to 4K/8K, high frame rate and HDR where YouTube offers them. Pick the exact quality or use Auto (adaptive).
+- **No ads**: Glint has its own player and talks to YouTube's InnerTube API directly. Ad renderers, promoted videos and sponsored shelves are dropped while feeds are parsed.
+- **SponsorBlock**: auto-skips sponsors, self-promotion, interaction reminders, intros/outros, previews, filler and non-music sections. Segments are drawn on the timeline. Lookups use a partial SHA-256 hash of the video ID.
+- **Accounts**: sign in with Google and add as many accounts as you want. Switch from the avatar menu. Shows your Home, Subscriptions, History, Watch later, Liked videos and playlists. Subscribe, like and save to Watch later. Each account has its own session, stored in the Keychain.
+- **YouTube Music**: Home, Explore, Charts, search, albums, artists, playlists, Liked songs and endless radio queues. Audio-only mode, plus a Song/Video switch.
+- **Player**: Picture in Picture, background audio, lock screen and Control Center controls, AirPlay, playback speed, double-tap to seek, drag down to minimise, a mini player that follows you around the app, and autoplay.
+- **Foldable layout**
+  - *Cover screen*: tab bar, full-width cards, stacked watch page. Rotating to landscape goes straight to fullscreen video.
+  - *Inner screen*: sidebar navigation and multi-column grids.
+    - Watch page, landscape: theatre-size player with details, Up next in a column on the right.
+    - Watch page, portrait: wide player on top, details and Up next side by side underneath.
+    - Music: Now playing with the queue alongside.
+  - Playback continues without interruption when you fold or unfold. The app picks its layout from the real window size, so it also works in any other window size.
+
+## Building
+
+The app builds only on GitHub Actions. The workflow is `.github/workflows/build.yml` and runs on the self-hosted macOS runner labelled **`xcode-27`**:
+
+1. Selects Xcode 27.
+2. Installs [XcodeGen](https://github.com/yonaskolb/XcodeGen) and generates `Glint.xcodeproj` from `project.yml`. The project file is generated, not committed.
+3. Builds an unsigned Release build for devices.
+4. Packages it as **`Glint.ipa`** and uploads it as the `Glint-ipa` artifact. The build log is uploaded too.
+
+The workflow runs on every push and pull request. You can also start it by hand from the Actions tab (`workflow_dispatch`).
+
+### Installing
+
+The `.ipa` is unsigned. Sign and install it with your own tool, for example AltStore, SideStore, Sideloadly or `codesign` with your Apple developer certificate. The bundle ID is `app.glint.Glint`; change `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` if you need your own.
+
+Requirements: iOS 18 or later.
+- AV1 streams (1440p and above on most videos) are offered only on devices with hardware AV1 decoding (A17 Pro and newer).
+- On other devices, Glint offers the highest-quality H.264 stream instead.
+
+## How playback works
+
+YouTube serves high resolutions as separate video and audio streams in fragmented MP4 (DASH), which AVPlayer cannot play directly. Glint does the following:
+
+1. Reads the `sidx` index of each stream with a small range request.
+2. Builds HLS playlists on the device: an `EXT-X-MAP` entry plus `EXT-X-BYTERANGE` segments pointing straight into YouTube's files.
+3. Serves those playlists to AVPlayer through an `AVAssetResourceLoader` custom scheme.
+
+AVPlayer then streams, buffers, seeks, adapts and runs Picture in Picture natively. Live streams use YouTube's own HLS manifests.
+
+## Project layout
+
+```
+Glint/
+  App/          App entry, settings
+  Core/         Foundation-only: InnerTube client, parsers, stream resolver,
+                synthetic HLS, SponsorBlock, auth (SAPISIDHASH), accounts
+  Playback/     PlayerController, resource loader, Now Playing, player layer/PiP
+  UI/           SwiftUI: Root (adaptive shells), Home, Search, Watch, Music,
+                Library, Channel, Settings, shared components
+project.yml     XcodeGen spec
+```
+
+## Maintenance notes
+
+- YouTube changes its private API from time to time. The client identities are in `Glint/Core/InnerTube/ClientProfile.swift`; usually bumping a version there is the only fix needed.
+- Playback tries the `ANDROID_VR` client first because it returns direct stream URLs without proof-of-origin tokens. The `IOS` client is the fallback.
+- Google sign-in happens in an isolated web view with a Safari user agent. If Google ever blocks embedded sign-in, sign-in is the only feature affected. Browsing, search, Music and playback all work signed out.

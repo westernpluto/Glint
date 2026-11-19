@@ -1,0 +1,9 @@
+Glint.xcodeproj/
+Glint/Info.plist
+build/
+DerivedData/
+Payload/
+*.ipa
+build.log
+.DS_Store
+xcuserdata/
