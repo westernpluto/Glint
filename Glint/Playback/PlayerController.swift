@@ -58,6 +58,11 @@ final class PlayerController {
     var segments: [SponsorSegment] = []
     var notice: String?
     var highlight: SponsorSegment?
+    /// A segment the user chose to skip by hand, while the playhead is inside it.
+    var manualSegment: SponsorSegment?
+    /// Pause at this time, or at the end of the current item when `sleepAtEnd`.
+    var sleepAt: Date?
+    var sleepAtEnd = false
     var isPiPActive = false
     var isFullscreen = false
     var showQueue = false
@@ -248,7 +253,7 @@ final class PlayerController {
         loadTask?.cancel()
         player.replaceCurrentItem(with: nil)
         details = nil; extras = nil; stream = nil; selectedOption = nil
-        segments = []; skipped = []; highlight = nil; loadError = nil
+        segments = []; skipped = []; highlight = nil; manualSegment = nil; loadError = nil
         currentTime = 0; duration = 0; playingResolution = nil; failures = 0
         player.isMuted = false; mutedBySponsor = false
         isLoading = true
@@ -258,7 +263,7 @@ final class PlayerController {
         let videoId = item.videoId
         let isMusic = item.isMusic
         let sbEnabled = settings.sponsorBlockEnabled
-        let sbCategories = Array(settings.sponsorCategories) + [.poi_highlight]
+        let sbCategories = Array(settings.sponsorCategories.union(settings.sponsorManual)) + [.poi_highlight]
         loadTask = Task { [weak self] in
             async let extrasTask: WatchExtras? = Self.fetchExtras(videoId, skip: isMusic)
             async let sbTask: [SponsorSegment] = Self.fetchSegments(videoId, enabled: sbEnabled, categories: sbCategories)
@@ -537,6 +542,7 @@ final class PlayerController {
         if abs(t - currentTime) >= 0.05 { currentTime = t }
         if let d = player.currentItem?.duration.seconds, d.isFinite, d > 0, abs(d - duration) > 1 { duration = d }
         sponsorCheck(t)
+        sleepCheck()
         if Date().timeIntervalSince(lastPositionSave) > 10 { savePosition() }
         prefetchNextIfNeeded(t)
         if Date().timeIntervalSince(lastNowPlayingUpdate) > 5 {
@@ -560,8 +566,14 @@ final class PlayerController {
     private func sponsorCheck(_ t: Double) {
         guard settings.sponsorBlockEnabled, !segments.isEmpty else { return }
         var inMute = false
-        for s in segments where settings.sponsorCategories.contains(s.category) {
+        var manual: SponsorSegment?
+        for s in segments {
             guard t >= s.start, t < s.end - 0.35 else { continue }
+            if settings.sponsorManual.contains(s.category), s.actionType == "skip" {
+                manual = s
+                continue
+            }
+            guard settings.sponsorCategories.contains(s.category) else { continue }
             if s.actionType == "mute" {
                 inMute = true
             } else if s.actionType == "skip", !skipped.contains(s.id) {
@@ -575,10 +587,52 @@ final class PlayerController {
             mutedBySponsor = inMute
             player.isMuted = inMute
         }
+        if manual?.id != manualSegment?.id { manualSegment = manual }
+    }
+
+    /// The Skip button for categories set to "Show a Skip button".
+    func skipManualSegment() {
+        guard let s = manualSegment else { return }
+        manualSegment = nil
+        seek(to: s.end)
+    }
+
+    // MARK: Queue & sleep timer
+
+    func enqueue(_ video: VideoItem) {
+        let item = QueueItem(video: video)
+        if queue.isEmpty { queue = [item]; index = 0; presentation = .expanded; start(); return }
+        queue.append(item)
+        flash("Added to queue")
+    }
+
+    func setSleepTimer(minutes: Int?) {
+        sleepAtEnd = false
+        sleepAt = minutes.map { Date().addingTimeInterval(Double($0) * 60) }
+        if let m = minutes { flash("Pausing in \(m) min") } else { flash("Sleep timer off") }
+    }
+
+    func setSleepAtEnd() {
+        sleepAt = nil
+        sleepAtEnd = true
+        flash(current?.isMusic == true ? "Pausing after this song" : "Pausing after this video")
+    }
+
+    private func sleepCheck() {
+        if let at = sleepAt, Date() >= at {
+            sleepAt = nil
+            pause()
+            flash("Sleep timer: paused")
+        }
     }
 
     private func handleEnd() {
         guard let c = current else { return }
+        if sleepAtEnd {
+            sleepAtEnd = false
+            flash("Sleep timer: paused")
+            return
+        }
         if index + 1 < queue.count {
             next()
         } else if !c.isMusic, settings.autoplay, extras?.related.first != nil {

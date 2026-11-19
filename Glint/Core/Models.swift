@@ -80,6 +80,13 @@ struct VideoDetails: Hashable {
     var publishDate: String?
 }
 
+struct Chapter: Identifiable, Hashable {
+    var id: Double { start }
+    var title: String
+    var start: Double
+    var thumbnail: URL?
+}
+
 struct WatchExtras {
     var channelAvatar: URL?
     var subscriberCount: String?
@@ -91,6 +98,7 @@ struct WatchExtras {
     var relatedContinuation: String?
     var commentsToken: String? = nil
     var commentCount: String? = nil
+    var chapters: [Chapter] = []
 }
 
 // MARK: Music

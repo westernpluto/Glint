@@ -17,7 +17,37 @@ final class AppSettings {
     var sponsorCategories: Set<SponsorCategory> {
         didSet { d.set(sponsorCategories.map(\.rawValue), forKey: "sbCategories") }
     }
+    /// Categories that show a Skip button instead of skipping automatically.
+    var sponsorManual: Set<SponsorCategory> {
+        didSet { d.set(sponsorManual.map(\.rawValue), forKey: "sbManual") }
+    }
     var showSkipNotice: Bool { didSet { d.set(showSkipNotice, forKey: "sbNotice") } }
+
+    enum SponsorMode: String, CaseIterable, Identifiable {
+        case auto, ask, off
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .auto: return "Skip automatically"
+            case .ask: return "Show a Skip button"
+            case .off: return "Don't skip"
+            }
+        }
+    }
+
+    func sponsorMode(_ c: SponsorCategory) -> SponsorMode {
+        sponsorCategories.contains(c) ? .auto : sponsorManual.contains(c) ? .ask : .off
+    }
+
+    func setSponsorMode(_ mode: SponsorMode, for c: SponsorCategory) {
+        sponsorCategories.remove(c)
+        sponsorManual.remove(c)
+        switch mode {
+        case .auto: sponsorCategories.insert(c)
+        case .ask: sponsorManual.insert(c)
+        case .off: break
+        }
+    }
     var preferHDR: Bool { didSet { d.set(preferHDR, forKey: "preferHDR") } }
 
     static let qualityChoices: [(Int, String)] = [
@@ -39,6 +69,8 @@ final class AppSettings {
         playbackSpeed = d.double(forKey: "playbackSpeed")
         sponsorBlockEnabled = d.bool(forKey: "sbEnabled")
         showSkipNotice = d.bool(forKey: "sbNotice")
+        sponsorManual = Set((d.stringArray(forKey: "sbManual") ?? ["intro", "outro", "preview", "filler"])
+            .compactMap(SponsorCategory.init(rawValue:)))
         preferHDR = d.bool(forKey: "preferHDR")
         if let raw = d.stringArray(forKey: "sbCategories") {
             sponsorCategories = Set(raw.compactMap(SponsorCategory.init(rawValue:)))

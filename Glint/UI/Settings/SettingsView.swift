@@ -66,11 +66,11 @@ struct SettingsView: View {
                     Toggle("SponsorBlock", isOn: $s.sponsorBlockEnabled)
                     if settings.sponsorBlockEnabled {
                         ForEach(SponsorCategory.allCases.filter { $0 != .poi_highlight }) { c in
-                            Toggle(isOn: Binding(
-                                get: { settings.sponsorCategories.contains(c) },
-                                set: { on in
-                                    if on { settings.sponsorCategories.insert(c) } else { settings.sponsorCategories.remove(c) }
-                                })) {
+                            Picker(selection: Binding(
+                                get: { settings.sponsorMode(c) },
+                                set: { settings.setSponsorMode($0, for: c) })) {
+                                ForEach(AppSettings.SponsorMode.allCases) { Text($0.title).tag($0) }
+                            } label: {
                                 HStack(spacing: 10) {
                                     Circle().fill(Color(hex: c.colorHex)).frame(width: 10, height: 10)
                                     VStack(alignment: .leading, spacing: 1) {
@@ -79,6 +79,7 @@ struct SettingsView: View {
                                     }
                                 }
                             }
+                            .pickerStyle(.menu)
                         }
                         Toggle("Show a notice when skipping", isOn: $s.showSkipNotice)
                     }

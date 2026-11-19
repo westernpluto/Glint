@@ -268,9 +268,25 @@ final class YouTubeService: @unchecked Sendable {
             commentsToken: results.findAll("itemSectionRenderer")
                 .first { $0["sectionIdentifier"].string == "comment-item-section" }?
                 .first("continuationCommand")?["token"].string,
-            commentCount: json["engagementPanels"].array
+            commentCount: Self.commentCount(json),
+            chapters: Self.chapters(json))
+    }
+
+    private static func commentCount(_ json: JSON) -> String? {
+        json["engagementPanels"].array
                 .first { ($0.first("panelIdentifier")?.string ?? "").contains("comment") }?
-                .first("contextualInfo")?.text)
+                .first("contextualInfo")?.text
+    }
+
+    /// Creator chapters (deduplicated by start time, in order).
+    static func chapters(_ json: JSON) -> [Chapter] {
+        var seen = Set<Int>()
+        let list = json.findAll("chapterRenderer").compactMap { c -> Chapter? in
+            guard let ms = c["timeRangeStartMillis"].int, let title = c["title"].text,
+                  seen.insert(ms).inserted else { return nil }
+            return Chapter(title: title, start: Double(ms) / 1000, thumbnail: Parser.thumbnail(c["thumbnail"], minWidth: 0))
+        }
+        return list.count >= 2 ? list.sorted { $0.start < $1.start } : []
     }
 
     /// A page of comments (or of a thread's replies) from a continuation token.

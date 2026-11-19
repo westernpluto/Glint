@@ -284,6 +284,8 @@ struct WatchDetails: View {
 
             actions
 
+            ChaptersRow()
+
             if let d, !d.description.isEmpty {
                 description(d.description)
             }
@@ -351,8 +353,8 @@ struct WatchDetails: View {
                         pill(player.audioOnly ? "Audio only" : "Quality · " + (player.selectedOption?.label ?? "Auto"),
                              player.audioOnly ? "headphones" : "slider.horizontal.3")
                     }
-                    if let id = player.current?.videoId, let url = URL(string: "https://youtu.be/\(id)") {
-                        ShareLink(item: url) { pill("Share", "square.and.arrow.up") }
+                    if let id = player.current?.videoId {
+                        ShareVideoMenu(videoId: id) { pill("Share", "square.and.arrow.up") }
                     }
                 }
                 .buttonStyle(.plain)
@@ -492,5 +494,28 @@ struct GrabHandle: View {
             .padding(.top, 7)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// Share the video, or share it starting where you are now.
+struct ShareVideoMenu<MenuLabel: View>: View {
+    var videoId: String
+    @ViewBuilder var label: () -> MenuLabel
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        Menu {
+            if let url = URL(string: "https://youtu.be/\(videoId)") {
+                ShareLink(item: url) { Label("Share video", systemImage: "square.and.arrow.up") }
+            }
+            // Read from AVPlayer directly: not observed, so this menu doesn't redraw every tick.
+            let raw = player.player.currentTime().seconds
+            let t = raw.isFinite ? Int(raw) : 0
+            if t > 5, let url = URL(string: "https://youtu.be/\(videoId)?t=\(t)") {
+                ShareLink(item: url) { Label("Share at \(formatTime(Double(t)))", systemImage: "clock") }
+            }
+        } label: {
+            label()
+        }
     }
 }

@@ -30,6 +30,7 @@ struct Scrubber: View {
     var duration: Double
     var segments: [SponsorSegment] = []
     var tint: Color = .white
+    var chapterStarts: [Double] = []
     var onSeek: (Double) -> Void
     @State private var dragValue: Double?
 
@@ -51,6 +52,15 @@ struct Scrubber: View {
                     }
                 }
                 Capsule().fill(tint).frame(width: w * frac, height: barHeight)
+                if duration > 0 {
+                    // Small breaks in the bar mark where chapters begin.
+                    ForEach(chapterStarts.filter { $0 > 0 }, id: \.self) { s in
+                        Rectangle()
+                            .fill(.black.opacity(0.6))
+                            .frame(width: 2, height: barHeight)
+                            .offset(x: w * s / duration - 1)
+                    }
+                }
                 Circle()
                     .fill(tint)
                     .frame(width: knob, height: knob)
@@ -125,6 +135,7 @@ struct MusicMoreMenu<MenuLabel: View>: View {
                 Label("Speed · " + speedLabel(Double(player.rate)), systemImage: "gauge.with.dots.needle.67percent")
             }
             .pickerStyle(.menu)
+            SleepTimerMenu()
         } label: {
             label()
         }
@@ -155,6 +166,7 @@ struct QualityMenu<MenuLabel: View>: View {
                     Label("Audio only", systemImage: "headphones")
                 }
             }
+            SleepTimerMenu()
             Menu {
                 ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0], id: \.self) { r in
                     choice(title: r == 1 ? "Normal" : String(format: "%g×", r), selected: abs(Double(player.rate) - r) < 0.01) {
@@ -247,7 +259,21 @@ struct PlayerOverlay: View {
                         .padding(.top, 50)
                 }
                 Spacer()
-                if player.highlight != nil {
+                if let seg = player.manualSegment {
+                    Button { player.skipManualSegment() } label: {
+                        Label("Skip \(seg.category.title.lowercased())", systemImage: "forward.end.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .frame(height: 40)
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 14)
+                    .padding(.bottom, visible ? 72 : 16)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                } else if player.highlight != nil {
                     Button { player.jumpToHighlight() } label: {
                         Label("Jump to highlight", systemImage: "sparkles")
                             .font(.footnote.weight(.semibold))
@@ -261,6 +287,7 @@ struct PlayerOverlay: View {
                 }
             }
             .animation(.snappy, value: player.notice)
+            .animation(.snappy, value: player.manualSegment?.id)
         }
         .animation(.easeInOut(duration: 0.2), value: visible)
         .onAppear { scheduleHide() }
@@ -337,6 +364,8 @@ struct PlayerOverlay: View {
                 Spacer()
 
                 VStack(spacing: 2) {
+                    CurrentChapterButton()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     LiveScrubber(tint: .white) { scheduleHide() }
                     HStack(spacing: 10) {
                         if player.stream?.isLive == true {
@@ -407,7 +436,8 @@ struct LiveScrubber: View {
     @Environment(PlayerController.self) private var player
 
     var body: some View {
-        Scrubber(current: player.currentTime, duration: player.duration, segments: player.segments, tint: tint) {
+        Scrubber(current: player.currentTime, duration: player.duration, segments: player.segments, tint: tint,
+                 chapterStarts: player.extras?.chapters.map(\.start) ?? []) {
             player.seek(to: $0)
             onSeek()
         }
@@ -438,5 +468,143 @@ struct ProgressLine: View {
                        height: 2)
         }
         .frame(height: 2)
+    }
+}
+
+// MARK: Chapters
+
+/// The chapter the playhead is in; tap for the full list.
+struct CurrentChapterButton: View {
+    @Environment(PlayerController.self) private var player
+    @State private var showList = false
+
+    var body: some View {
+        let chapters = player.extras?.chapters ?? []
+        if let current = chapters.last(where: { $0.start <= player.currentTime + 0.5 }) {
+            Button { showList = true } label: {
+                HStack(spacing: 4) {
+                    Text(current.title).lineLimit(1)
+                    Image(systemName: "chevron.right").font(.caption2.weight(.bold))
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Chapter: \(current.title). Show chapters")
+            .sheet(isPresented: $showList) {
+                NavigationStack {
+                    ScrollView { ChapterList(chapters: chapters) { showList = false }.padding(16) }
+                        .navigationTitle("Chapters")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarPinnedTrailing) {
+                                Button("Done", systemImage: "checkmark") { showList = false }
+                            }
+                        }
+                }
+                .presentationDetents([.medium, .large])
+            }
+        }
+    }
+}
+
+/// Vertical list of chapters with thumbnails; the current one is highlighted.
+struct ChapterList: View {
+    var chapters: [Chapter]
+    var onPick: () -> Void = {}
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        let currentStart = chapters.last(where: { $0.start <= player.currentTime + 0.5 })?.start
+        LazyVStack(alignment: .leading, spacing: 10) {
+            ForEach(chapters) { c in
+                Button {
+                    player.seek(to: c.start)
+                    onPick()
+                } label: {
+                    HStack(spacing: 12) {
+                        Thumbnail(url: c.thumbnail, duration: formatTime(c.start), corner: 8).frame(width: 112)
+                        Text(c.title)
+                            .font(.subheadline.weight(c.start == currentStart ? .semibold : .regular))
+                            .foregroundStyle(c.start == currentStart ? Color.accentColor : .primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+/// Horizontal chapter cards for the watch page.
+struct ChaptersRow: View {
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        let chapters = player.extras?.chapters ?? []
+        if !chapters.isEmpty {
+            let currentStart = chapters.last(where: { $0.start <= player.currentTime + 0.5 })?.start
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Chapters").font(.headline)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 12) {
+                        ForEach(chapters) { c in
+                            Button { player.seek(to: c.start) } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Thumbnail(url: c.thumbnail, duration: formatTime(c.start), corner: 10)
+                                        .overlay {
+                                            if c.start == currentStart {
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                                            }
+                                        }
+                                    Text(c.title)
+                                        .font(.footnote.weight(c.start == currentStart ? .semibold : .regular))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                .frame(width: 150)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: Sleep timer
+
+/// Sleep timer choices, as a submenu.
+struct SleepTimerMenu: View {
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        Menu {
+            Button("Off") { player.setSleepTimer(minutes: nil) }
+            ForEach([15, 30, 45, 60, 90], id: \.self) { m in
+                Button("\(m) minutes") { player.setSleepTimer(minutes: m) }
+            }
+            Button(player.current?.isMusic == true ? "End of song" : "End of video") { player.setSleepAtEnd() }
+        } label: {
+            Label(label, systemImage: "moon.zzz")
+        }
+    }
+
+    private var label: String {
+        if player.sleepAtEnd { return "Sleep timer · End of " + (player.current?.isMusic == true ? "song" : "video") }
+        if let at = player.sleepAt {
+            let mins = max(1, Int(ceil(at.timeIntervalSinceNow / 60)))
+            return "Sleep timer · \(mins) min"
+        }
+        return "Sleep timer"
     }
 }
