@@ -321,9 +321,9 @@ struct MusicBrowseView: View {
                 if !songs.isEmpty || p.playlistId != nil {
                     HStack(spacing: 12) {
                         Button { play(p, songs, shuffle: false) } label: { Label("Play", systemImage: "play.fill").frame(minWidth: 110) }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.glassProminent)
                         Button { play(p, songs, shuffle: true) } label: { Label("Shuffle", systemImage: "shuffle").frame(minWidth: 110) }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                     }
                     .controlSize(.large)
                     .padding(.top, 6)

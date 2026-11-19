@@ -41,9 +41,20 @@ final class AccountStore {
 
     /// Persists rotated cookies for the active account without reloading anything.
     private func sessionRotated(_ auth: AuthContext) {
-        guard let i = accounts.firstIndex(where: { $0.id == activeID }) else { return }
+        // Only the session these cookies belong to (sign-in briefly uses a new account's cookies
+        // while another one is active, and a switch can land between the request and this hop).
+        guard let i = accounts.firstIndex(where: { $0.id == activeID }),
+              Self.sessionKey(accounts[i].cookies) == Self.sessionKey(auth.cookies) else { return }
         accounts[i].cookies = auth.cookies
         persist()
+    }
+
+    /// The cookie that identifies a Google session; it doesn't rotate.
+    private static func sessionKey(_ cookies: [StoredCookie]) -> String? {
+        for name in ["SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID", "SID"] {
+            if let c = cookies.first(where: { $0.name == name }) { return name + "=" + c.value }
+        }
+        return nil
     }
 
     /// Adds (or refreshes) an account from freshly captured sign-in cookies.
@@ -60,6 +71,10 @@ final class AccountStore {
             InnerTube.shared.auth = previous
             throw error
         }
+        // Keep any cookies the server rotated while account info loaded.
+        let cookies = InnerTube.shared.auth.flatMap {
+            Self.sessionKey($0.cookies) == Self.sessionKey(cookies) ? $0.cookies : nil
+        } ?? cookies
 
         if let i = accounts.firstIndex(where: { $0.info.name == info.name && $0.info.handle == info.handle }) {
             accounts[i].cookies = cookies

@@ -244,7 +244,7 @@ struct ErrorState: View {
             } description: {
                 Text(error.localizedDescription)
             } actions: {
-                Button("Try again", action: retry).buttonStyle(.bordered)
+                Button("Try again", action: retry).buttonStyle(.glass)
             }
         }
     }
@@ -261,7 +261,7 @@ struct SignInPrompt: View {
             Text(message)
         } actions: {
             Button("Sign in") { showSignIn = true }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
         }
         .sheet(isPresented: $showSignIn) { SignInView() }
     }

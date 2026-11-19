@@ -56,6 +56,7 @@ struct SubscribeButton: View {
     var initial: Bool?
     @State private var subscribed: Bool?
     @State private var busy = false
+    @State private var failures = 0
     @Environment(AccountStore.self) private var accounts
 
     var body: some View {
@@ -73,6 +74,7 @@ struct SubscribeButton: View {
             .font(.subheadline.weight(.semibold))
             .disabled(busy)
             .sensoryFeedback(.selection, trigger: subscribed)
+            .sensoryFeedback(.error, trigger: failures)
         }
     }
 
@@ -82,7 +84,9 @@ struct SubscribeButton: View {
             do {
                 try await YouTubeService.shared.setSubscribed(!on, channelId: channelId)
                 subscribed = !on
-            } catch {}
+            } catch {
+                failures += 1
+            }
             busy = false
         }
     }

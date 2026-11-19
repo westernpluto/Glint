@@ -84,11 +84,11 @@ struct PlaylistView: View {
                     Button { playAll(shuffle: false) } label: {
                         Label("Play all", systemImage: "play.fill").frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     Button { playAll(shuffle: true) } label: {
                         Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                 }
                 .controlSize(.large)
                 .padding(.horizontal, Metrics.gutter(screen))
