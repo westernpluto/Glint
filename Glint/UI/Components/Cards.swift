@@ -118,13 +118,23 @@ struct VideoMenu: View {
         if accounts.isSignedIn {
             Button {
                 Task {
-                    try? await YouTubeService.shared.saveToWatchLater(video.id)
-                    player.flash("Saved to Watch later")
+                    do {
+                        try await YouTubeService.shared.saveToWatchLater(video.id)
+                        player.flash("Saved to Watch later")
+                    } catch {
+                        player.flash("Couldn't save to Watch later")
+                    }
                 }
             } label: { Label("Save to Watch later", systemImage: "clock") }
         }
         if let url = URL(string: "https://youtu.be/\(video.id)") {
             ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
+        }
+        if WatchHistory.shared.recent.contains(where: { $0.id == video.id }) {
+            Divider()
+            Button(role: .destructive) { WatchHistory.shared.remove(video.id) } label: {
+                Label("Remove from history", systemImage: "eye.slash")
+            }
         }
     }
 }

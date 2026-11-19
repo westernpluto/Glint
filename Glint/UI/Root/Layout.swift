@@ -107,3 +107,12 @@ extension View {
         }
     }
 }
+
+extension View {
+    /// Horizontal scroll views draw into the side safe areas, which on a closed iPhone Duo
+    /// puts cards under the vertical tab bar. Keeps a row inside its own frame, with
+    /// vertical slack so shadows and focus effects aren't cut off.
+    func keepsToOwnFrame() -> some View {
+        mask(Rectangle().padding(.vertical, -24))
+    }
+}

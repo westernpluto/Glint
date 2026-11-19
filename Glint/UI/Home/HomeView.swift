@@ -135,6 +135,7 @@ struct SubscribedChannelsRow: View {
                     }
                     .padding(.horizontal, Metrics.gutter(screen))
                 }
+                .keepsToOwnFrame()
                 .padding(.vertical, 8)
             }
         }

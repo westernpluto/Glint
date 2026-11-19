@@ -239,7 +239,7 @@ struct PlayerOverlay: View {
             }
 
             if let err = player.loadError {
-                VStack(spacing: 14) {
+                VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.title2)
                         .symbolRenderingMode(.hierarchical)
@@ -256,7 +256,7 @@ struct PlayerOverlay: View {
                     .buttonStyle(.plain)
                 }
                 .foregroundStyle(.white)
-                .padding(24)
+                .padding(16)
                 .frame(maxWidth: 360)
             }
 
@@ -385,43 +385,46 @@ struct PlayerOverlay: View {
 
                 Spacer()
 
-                VStack(spacing: 4) {
-                    CurrentChapterButton()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    LiveScrubber(tint: .white) { scheduleHide() }
-                    HStack(spacing: 6) {
-                        if player.stream?.isLive == true {
-                            Label("LIVE", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(.red)
-                        } else {
-                            ElapsedLabel(style: .elapsedOfTotal)
-                        }
-                        Spacer()
-                        QualityMenu {
-                            HStack(spacing: 4) {
-                                Image(systemName: "gearshape")
-                                if let r = player.playingResolution, !player.audioOnly { Text(r) }
+                // With an error showing, the timeline has nothing to offer and would sit under it.
+                if player.loadError == nil {
+                    VStack(spacing: 4) {
+                        CurrentChapterButton()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        LiveScrubber(tint: .white) { scheduleHide() }
+                        HStack(spacing: 6) {
+                            if player.stream?.isLive == true {
+                                Label("LIVE", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(.red)
+                            } else {
+                                ElapsedLabel(style: .elapsedOfTotal)
                             }
-                            .frame(height: 36)
-                            .padding(.horizontal, 10)
-                            .contentShape(Rectangle())
-                        }
-                        .accessibilityLabel("Quality, speed and sleep timer")
-                        if !player.captionTracks.isEmpty, !player.audioOnly {
-                            barButton(player.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill",
-                                      label: player.selectedCaption == nil ? "Turn captions on" : "Turn captions off") {
-                                player.toggleCaptions()
+                            Spacer()
+                            QualityMenu {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "gearshape")
+                                    if let r = player.playingResolution, !player.audioOnly { Text(r) }
+                                }
+                                .frame(height: 36)
+                                .padding(.horizontal, 10)
+                                .contentShape(Rectangle())
                             }
+                            .accessibilityLabel("Quality, speed and sleep timer")
+                            if !player.captionTracks.isEmpty, !player.audioOnly {
+                                barButton(player.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill",
+                                          label: player.selectedCaption == nil ? "Turn captions on" : "Turn captions off") {
+                                    player.toggleCaptions()
+                                }
+                            }
+                            if let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
+                                barButton("pip.enter", label: "Picture in Picture") { pip.startPictureInPicture() }
+                            }
+                            barButton(fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                      label: fullscreen ? "Exit full screen" : "Full screen", action: onToggleFullscreen)
                         }
-                        if let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
-                            barButton("pip.enter", label: "Picture in Picture") { pip.startPictureInPicture() }
-                        }
-                        barButton(fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                                  label: fullscreen ? "Exit full screen" : "Full screen", action: onToggleFullscreen)
+                        .font(.caption.weight(.semibold).monospacedDigit())
                     }
-                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, fullscreen ? 12 : 4)
                 }
-                .padding(.horizontal, 14)
-                .padding(.bottom, fullscreen ? 12 : 4)
             }
             .foregroundStyle(.white)
             .buttonStyle(.plain)
@@ -619,6 +622,7 @@ struct ChaptersRow: View {
                         }
                     }
                 }
+                .keepsToOwnFrame()
             }
         }
     }
