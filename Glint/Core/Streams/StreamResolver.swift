@@ -217,8 +217,13 @@ final class StreamResolver: @unchecked Sendable {
         var start: Int?
         var end: Int?
         /// Only a definite refusal rejects a client; network trouble doesn't.
-        var ok: Bool { ![start, end].contains { $0 == 403 || $0 == 401 } }
-        var description: String { "start \(start.map(String.init) ?? "–") end \(end.map(String.init) ?? "–")" }
+        var ok: Bool { !Self.refused(start) && !Self.refused(end) }
+        var description: String { "start " + Self.text(start) + " end " + Self.text(end) }
+        private static func refused(_ code: Int?) -> Bool { code == 403 || code == 401 }
+        private static func text(_ code: Int?) -> String {
+            guard let code else { return "–" }
+            return String(code)
+        }
     }
 
     /// YouTube serves some clients only the first ~third of each stream (or nothing) and
