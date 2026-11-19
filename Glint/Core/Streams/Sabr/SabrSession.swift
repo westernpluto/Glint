@@ -514,6 +514,10 @@ enum SabrBandwidth {
 
     static var bitsPerSecond: Double? { lock.withLock { estimate } }
 
+    /// Variant bandwidth (video + audio) AVPlayer may pick in Auto: the speed with 1.5×
+    /// headroom; 6 Mbps (about 1080p) before anything is measured.
+    static var peakBitRate: Double { (bitsPerSecond ?? 9_000_000) / 1.5 }
+
     /// After a stall: the connection didn't carry `bitsPerSecond` (video + audio), so the
     /// estimate drops just under what Auto would need for it.
     static func limit(toBelow bitsPerSecond: Int) {

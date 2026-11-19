@@ -96,6 +96,9 @@ final class PlayerController {
     @ObservationIgnored private var pausedAt: Date?
     /// The single variant SABR Auto is playing (nil when a quality was chosen or not SABR).
     @ObservationIgnored private var sabrAutoPick: DashFormat?
+    /// SABR Auto with every quality offered and AVPlayer capped by our speed estimate.
+    @ObservationIgnored private var sabrAutoABR = false
+    @ObservationIgnored private var lastPeakUpdate = Date.distantPast
 
     /// Brings the loopback SABR server back (fresh listener, same port if it can) and rebuilds
     /// the item at the current position, in case the port changed.
@@ -147,6 +150,10 @@ final class PlayerController {
                 if let o = selectedOption, case .dash(let f) = o.source { return f }
                 return sabrAutoPick
             }()
+            if sabrAutoABR, let item = player.currentItem {
+                line += ", Auto cap ≈ " + mbps(item.preferredPeakBitRate)
+                if let now = item.accessLog()?.events.last?.indicatedBitrate, now > 0 { line += ", playing ≈ " + mbps(now) }
+            }
             if let v = playing, !audioOnly {
                 let need = Double(v.bitrate + (s.audio?.bitrate ?? 0))
                 let label = "\(v.width > 0 ? min(v.width, v.height) : v.height)p"
@@ -489,11 +496,21 @@ final class PlayerController {
                 // Auto offers one quality: AVPlayer measures the loopback server (cached segments
                 // arrive instantly), so left to itself it climbs past what the connection carries.
                 sabrAutoPick = nil
-                if selectedOption == nil, videos.count > 1,
-                   let pick = SabrBandwidth.autoVideo(videos, audioBitrate: s.audio?.bitrate ?? 0,
-                                                      defaultQuality: settings.defaultQuality) {
-                    videos = [pick]
-                    sabrAutoPick = pick
+                sabrAutoABR = false
+                if selectedOption == nil, videos.count > 1 {
+                    if settings.defaultQuality > 0,
+                       let pick = SabrBandwidth.autoVideo(videos, audioBitrate: s.audio?.bitrate ?? 0,
+                                                          defaultQuality: settings.defaultQuality) {
+                        videos = [pick]          // a default quality was set: hold it
+                        sabrAutoPick = pick
+                    } else {
+                        // Every quality up to 4K; AVPlayer switches between them at segment
+                        // boundaries, kept under our measured speed by preferredPeakBitRate
+                        // (its own measurement only sees the loopback server).
+                        let lines: (DashFormat) -> Int = { $0.width > 0 ? min($0.width, $0.height) : $0.height }
+                        videos = videos.filter { lines($0) <= 2160 }
+                        sabrAutoABR = true
+                    }
                 }
                 let audioOnly = videos.isEmpty
                 Task { await sabr.setAudioOnly(audioOnly) }
@@ -510,6 +527,10 @@ final class PlayerController {
 
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 0
+        if sabrAutoABR, stream?.sabr != nil, stream?.hlsURL == nil {
+            item.preferredPeakBitRate = SabrBandwidth.peakBitRate
+            lastPeakUpdate = Date()
+        }
         observe(item)
         isLoading = true
         player.replaceCurrentItem(with: item)
@@ -619,7 +640,7 @@ final class PlayerController {
         let item = player.currentItem
         let at = currentTime
         // SABR in Auto steps down sooner: the stall is most likely the connection.
-        let sabrAuto = stream?.sabr != nil && selectedOption == nil && !audioOnly && sabrAutoPick != nil
+        let sabrAuto = stream?.sabr != nil && selectedOption == nil && !audioOnly && (sabrAutoPick != nil || sabrAutoABR)
         stallTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(sabrAuto ? 8 : 15))
             if sabrAuto {
@@ -640,6 +661,16 @@ final class PlayerController {
     private func sabrStalled(_ item: AVPlayerItem?) async {
         guard await SabrServer.shared.isAlive() else {
             restartSabrServer("stalled, local server gone", force: true)
+            return
+        }
+        if sabrAutoABR, let item {
+            // Lower the cap just under the quality that stalled; AVPlayer steps down itself.
+            let playing = item.accessLog()?.events.last?.indicatedBitrate ?? 0
+            guard playing > 0 else { return recover(item, message: "Playback stalled.") }
+            SabrBandwidth.limit(toBelow: Int(playing))
+            item.preferredPeakBitRate = SabrBandwidth.peakBitRate
+            note(String(format: "Stalling at %.1f Mbps → Auto cap %.1f Mbps", playing / 1e6, item.preferredPeakBitRate / 1e6))
+            flash("Lowered quality to keep playing")
             return
         }
         guard let s = stream, let pick = sabrAutoPick else { return recover(item, message: "Playback stalled.") }
@@ -818,6 +849,12 @@ final class PlayerController {
         // (paused/buffering ticks would otherwise still redraw the timeline).
         if abs(t - currentTime) >= 0.05 { currentTime = t }
         if let d = player.currentItem?.duration.seconds, d.isFinite, d > 0, abs(d - duration) > 1 { duration = d }
+        // SABR Auto: follow the speed estimate (up as well as down) every few seconds.
+        if sabrAutoABR, Date().timeIntervalSince(lastPeakUpdate) > 5, let item = player.currentItem {
+            lastPeakUpdate = Date()
+            let peak = SabrBandwidth.peakBitRate
+            if abs(peak - item.preferredPeakBitRate) / max(peak, 1) > 0.1 { item.preferredPeakBitRate = peak }
+        }
         sponsorCheck(t)
         sleepCheck()
         if Date().timeIntervalSince(lastPositionSave) > 10 { savePosition() }
