@@ -215,7 +215,8 @@ struct WatchView: View {
         } else {
             VideoBox()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.black)
+                // Extend the black stage under the status bar / vertical bar instead of leaving a strip.
+                .background { Color.black.ignoresSafeArea() }
                 .collapsesPlayer($drag)
         }
     }
@@ -423,7 +424,7 @@ struct UpNextList: View {
                 Divider().padding(.vertical, 2)
             }
 
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .center) {
                 Text("Up next").font(.title3.weight(.bold))
                 Spacer()
                 Toggle(isOn: Binding(get: { settings.autoplay }, set: { settings.autoplay = $0 })) {

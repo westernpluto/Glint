@@ -60,15 +60,14 @@ ls -la "$OUT"
 
 # Inner-display stand-in: iPad mini — regular width and close to the Duo inner panel's size.
 # (simctl can't move an app to the Duo inner panel without a fold event.)
-IPAD=$(t 60 xcrun simctl list devicetypes -j | python3 -c '
-import json, sys
-ts = [t for t in json.load(sys.stdin)["devicetypes"] if "iPad mini" in t["name"]]
-print(ts[-1]["identifier"] if ts else "")')
-if [ -n "$IPAD" ]; then
+UDID=""
+for IPAD in com.apple.CoreSimulator.SimDeviceType.iPad-mini-A20-Pro com.apple.CoreSimulator.SimDeviceType.iPad-mini-A17-Pro; do
   for rt in $RUNTIMES; do
-    UDID=$(t 60 xcrun simctl create "glint-ipad" "$IPAD" "$rt" 2>>"$LOG") && { note "iPad on $rt"; break; }
+    UDID=$(t 60 xcrun simctl create "glint-ipad" "$IPAD" "$rt" 2>>"$LOG") && { note "$IPAD on $rt"; break 2; }
     UDID=""
   done
+done
+if true; then
   if [ -n "$UDID" ]; then
     t 120 xcrun simctl boot "$UDID" || true
     t 300 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || note "iPad bootstatus timed out"
