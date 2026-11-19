@@ -204,6 +204,7 @@ struct CommentRow: View {
 struct CommentsPreview: View {
     @Environment(PlayerController.self) private var player
     @State private var show = false
+    @State private var top: Comment?
 
     var body: some View {
         Button { show = true } label: {
@@ -216,10 +217,22 @@ struct CommentsPreview: View {
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 }
-                Text(player.extras?.commentsToken == nil ? "Comments are turned off." : "Tap to read what people are saying.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                if let top {
+                    HStack(alignment: .top, spacing: 10) {
+                        Avatar(url: top.avatar, size: 24)
+                        Text(top.text)
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                } else {
+                    Text(player.extras == nil ? "Loading…"
+                         : player.extras?.commentsToken == nil ? "Comments are turned off." : "Tap to read the conversation.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -227,7 +240,12 @@ struct CommentsPreview: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(player.extras == nil)
+        .disabled(player.extras?.commentsToken == nil)
+        .task(id: player.extras?.commentsToken) {
+            top = nil
+            guard let token = player.extras?.commentsToken else { return }
+            top = try? await YouTubeService.shared.comments(token).comments.first
+        }
         .sheet(isPresented: $show) {
             NavigationStack {
                 ScrollView {
@@ -267,7 +285,7 @@ struct WatchSidePanel: View {
             }
             .pickerStyle(.segmented)
             switch tab {
-            case .upNext: UpNextList()
+            case .upNext: UpNextList(showsTitle: false)
             case .comments: CommentsList(token: player.extras?.commentsToken)
             }
         }

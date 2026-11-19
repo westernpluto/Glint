@@ -135,6 +135,9 @@ struct FeedScreen<Header: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header()
+                if !loaded && loading && items.isEmpty {
+                    SkeletonFeed().padding(.top, 8)
+                }
                 FeedGrid(items: items)
                     .padding(.top, 8)
                 if let token = continuation {
@@ -149,7 +152,7 @@ struct FeedScreen<Header: View>: View {
         }
         .overlay {
             if !loaded && loading {
-                ProgressView().controlSize(.large)
+                EmptyView()
             } else if let error, items.isEmpty {
                 ErrorState(error: error) { Task { await reload() } }
             } else if loaded && items.isEmpty {

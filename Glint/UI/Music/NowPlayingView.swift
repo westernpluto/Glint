@@ -9,11 +9,18 @@ struct NowPlayingView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showQueue = false
     @State private var sheetTab: MusicSidePanel.Tab = .queue
+    @State private var palette: [Color]?
 
     var body: some View {
         let regular = horizontalSizeClass == .regular
         arranged(regular: regular)
             .background { backdrop }
+            // Always light-on-dark over the artwork colours, like a music player should be.
+            .environment(\.colorScheme, .dark)
+            .task(id: player.current?.thumbnail) {
+                guard let url = player.current?.thumbnail else { return }
+                palette = await ArtworkPalette.shared.colors(for: url)
+            }
             .sheet(isPresented: $showQueue) {
                 NavigationStack {
                     MusicSidePanel(tab: sheetTab)
@@ -58,14 +65,17 @@ struct NowPlayingView: View {
         }
     }
 
+    /// A deep gradient taken from the artwork, with the artwork itself blurred on top.
     private var backdrop: some View {
         ZStack {
-            Color(uiColor: .systemBackground)
+            Color.black
+            LinearGradient(colors: palette ?? [Color(white: 0.22), Color(white: 0.1)], startPoint: .top, endPoint: .bottom)
             RemoteImage(url: player.current?.thumbnail)
                 .blur(radius: 90)
-                .opacity(0.55)
-                .saturation(1.5)
+                .opacity(0.35)
+                .saturation(1.4)
         }
+        .animation(.easeInOut(duration: 0.6), value: palette)
         .ignoresSafeArea()
     }
 
@@ -241,6 +251,8 @@ struct NowPlayingView: View {
 }
 
 struct QueueList: View {
+    /// Off when a segmented control above already says "Up next".
+    var showsHeader = true
     @Environment(PlayerController.self) private var player
 
     var body: some View {
@@ -264,7 +276,9 @@ struct QueueList: View {
                         if let currentID, let i = player.queue.firstIndex(where: { $0.id == currentID }) { player.index = i }
                     }
                 } header: {
-                    Text("Up next").font(.title3.weight(.bold)).foregroundStyle(.primary).textCase(nil)
+                    if showsHeader {
+                        Text("Up next").font(.title3.weight(.bold)).foregroundStyle(.primary).textCase(nil)
+                    }
                 }
             }
             .listStyle(.plain)
@@ -378,7 +392,7 @@ struct MusicSidePanel: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             switch tab {
-            case .queue: QueueList()
+            case .queue: QueueList(showsHeader: false)
             case .lyrics: LyricsView()
             }
         }

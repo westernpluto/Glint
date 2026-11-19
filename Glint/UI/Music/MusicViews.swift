@@ -12,13 +12,20 @@ struct MusicHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                searchBar
                 if accounts.isSignedIn { libraryRow }
+                if shelves.isEmpty && error == nil {
+                    VStack(alignment: .leading, spacing: 28) {
+                        SkeletonShelf(square: true)
+                        SkeletonShelf(square: true)
+                    }
+                    .padding(.vertical, 16)
+                }
                 ShelfStack(shelves: shelves)
             }
         }
         .overlay {
-            if shelves.isEmpty && loading { ProgressView().controlSize(.large) }
-            else if shelves.isEmpty, let error { ErrorState(error: error) { Task { await load() } } }
+            if shelves.isEmpty, !loading, let error { ErrorState(error: error) { Task { await load() } } }
         }
         .refreshable { await load() }
         .task(id: accounts.generation) {
@@ -27,15 +34,30 @@ struct MusicHomeView: View {
             loadedGeneration = accounts.generation
         }
         .navigationTitle("Music")
-        .toolbar {
-            // One search for the whole app: jump to Search, scoped to Music.
-            ToolbarItem(placement: .primaryAction) {
-                Button("Search music", systemImage: "magnifyingglass") {
-                    router.searchScope = .music
-                    router.section = .search
-                }
+    }
+
+    /// Looks like a search field; opens the app's one Search, scoped to Music.
+    private var searchBar: some View {
+        Button {
+            router.searchScope = .music
+            router.section = .search
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                Text("Songs, albums, artists")
+                Spacer()
             }
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .glassEffect(.regular.interactive(), in: .capsule)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Search music")
+        .padding(.horizontal, Metrics.gutter(screen))
+        .padding(.top, 4)
+        .frame(maxWidth: 640, alignment: .leading)
     }
 
     private var libraryRow: some View {

@@ -389,6 +389,8 @@ struct WatchDetails: View {
 // MARK: Up next
 
 struct UpNextList: View {
+    /// Off when a segmented control above already says "Up next".
+    var showsTitle = true
     @Environment(PlayerController.self) private var player
     @Environment(AppSettings.self) private var settings
 
@@ -412,7 +414,9 @@ struct UpNextList: View {
             }
 
             HStack(alignment: .center) {
-                Text("Up next").font(.title3.weight(.bold))
+                if showsTitle {
+                    Text("Up next").font(.title3.weight(.bold))
+                }
                 Spacer()
                 Toggle(isOn: Binding(get: { settings.autoplay }, set: { settings.autoplay = $0 })) {
                     Text("Autoplay").font(.subheadline).foregroundStyle(.secondary)

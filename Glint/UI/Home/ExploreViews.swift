@@ -82,6 +82,10 @@ struct ExploreFeed<Header: View>: View {
                 }
                 if let first = sections.first, let hero = first.items.first {
                     HeroCard(video: hero, eyebrow: first.title)
+                } else if error == nil {
+                    SkeletonHero()
+                    SkeletonShelf()
+                    SkeletonShelf()
                 }
                 ForEach(Array(sections.enumerated()), id: \.offset) { i, section in
                     ShelfRow(section: section, dropFirst: i == 0)
@@ -94,8 +98,6 @@ struct ExploreFeed<Header: View>: View {
             if sections.isEmpty {
                 if let error, !loading {
                     ErrorState(error: error) { Task { await load(force: true) } }
-                } else {
-                    ProgressView().controlSize(.large)
                 }
             }
         }
