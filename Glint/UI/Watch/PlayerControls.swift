@@ -86,6 +86,51 @@ struct Scrubber: View {
     }
 }
 
+let playbackSpeeds: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+
+func speedLabel(_ r: Double) -> String { r == 1 ? "Normal" : String(format: "%g×", r) }
+
+/// Playback speed as a checkmarked list.
+struct SpeedMenu<MenuLabel: View>: View {
+    @Environment(PlayerController.self) private var player
+    @ViewBuilder var label: () -> MenuLabel
+
+    var body: some View {
+        Menu {
+            Picker("Playback speed", selection: Binding(get: { Double(player.rate) }, set: { player.setRate(Float($0)) })) {
+                ForEach(playbackSpeeds, id: \.self) { Text(speedLabel($0)).tag($0) }
+            }
+        } label: {
+            label()
+        }
+    }
+}
+
+/// Music's "More" menu: actions that make sense for a song (no video resolutions).
+struct MusicMoreMenu<MenuLabel: View>: View {
+    @Environment(PlayerController.self) private var player
+    @ViewBuilder var label: () -> MenuLabel
+
+    var body: some View {
+        Menu {
+            Button { player.startRadio() } label: {
+                Label("Start radio from this song", systemImage: "dot.radiowaves.left.and.right")
+            }
+            if let id = player.current?.videoId, let url = URL(string: "https://music.youtube.com/watch?v=\(id)") {
+                ShareLink(item: url) { Label("Share song", systemImage: "square.and.arrow.up") }
+            }
+            Picker(selection: Binding(get: { Double(player.rate) }, set: { player.setRate(Float($0)) })) {
+                ForEach(playbackSpeeds, id: \.self) { Text(speedLabel($0)).tag($0) }
+            } label: {
+                Label("Speed · " + speedLabel(Double(player.rate)), systemImage: "gauge.with.dots.needle.67percent")
+            }
+            .pickerStyle(.menu)
+        } label: {
+            label()
+        }
+    }
+}
+
 /// Quality / speed / audio-only menu.
 struct QualityMenu<MenuLabel: View>: View {
     @Environment(PlayerController.self) private var player

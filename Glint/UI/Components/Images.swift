@@ -108,16 +108,33 @@ struct Thumbnail: View {
     var duration: String?
     var isLive = false
     var corner: CGFloat = Metrics.corner
+    /// When set, shows how much of this video you've already watched.
+    var videoId: String? = nil
 
     var body: some View {
+        let watched = videoId.flatMap { WatchHistory.shared.progress(for: $0) }
         Color.clear
             .aspectRatio(16 / 9, contentMode: .fit)
             .overlay { RemoteImage(url: url) }
             .overlay(alignment: .bottomTrailing) {
                 if isLive {
                     Badge(text: "LIVE", tint: .red)
+                        .padding(.bottom, watched == nil ? 0 : 4)
                 } else if let duration, !duration.isEmpty {
                     Badge(text: duration)
+                        .padding(.bottom, watched == nil ? 0 : 4)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let watched {
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Rectangle().fill(.white.opacity(0.35))
+                            Rectangle().fill(Color.accentColor).frame(width: g.size.width * watched)
+                        }
+                    }
+                    .frame(height: 4)
+                    .accessibilityLabel("\(Int(watched * 100))% watched")
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))

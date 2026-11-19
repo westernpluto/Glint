@@ -194,6 +194,21 @@ final class PlayerController {
         }
     }
 
+    /// Replaces what's coming up with a radio built from the current song.
+    func startRadio() {
+        guard let c = current else { return }
+        let vid = c.videoId
+        Task {
+            guard let more = try? await YouTubeService.shared.musicQueue(videoId: vid, playlistId: nil),
+                  self.current?.videoId == vid else { return }
+            let extra = more.compactMap(QueueItem.init(music:)).filter { $0.videoId != vid }
+            guard !extra.isEmpty, let now = self.current else { return }
+            self.queue = [now] + extra
+            self.index = 0
+            self.flash("Radio started")
+        }
+    }
+
     /// Plays a whole album / playlist from YouTube Music.
     func playMusicCollection(playlistId: String, shuffle: Bool = false) {
         Task {
@@ -253,10 +268,16 @@ final class PlayerController {
                 guard !Task.isCancelled, self.current?.videoId == videoId else { return }
                 self.stream = s
                 self.details = s.details
+                if !isMusic, !s.isLive {
+                    WatchHistory.shared.record(VideoItem(
+                        id: videoId, title: s.details.title, channelName: s.details.channelName,
+                        channelId: s.details.channelId, thumbnail: item.thumbnail,
+                        duration: s.details.lengthSeconds.map { formatTime(Double($0)) }))
+                }
                 self.selectedOption = self.preferredOption(in: s)
                 self.duration = Double(s.details.lengthSeconds ?? 0)
                 self.resolvedAt = Date()
-                let resumeAt = (isMusic || s.isLive) ? nil : PlaybackPositions.position(for: videoId)
+                let resumeAt = (isMusic || s.isLive) ? nil : WatchHistory.shared.position(for: videoId)
                 self.installItem(at: resumeAt ?? 0)
                 if let resumeAt { self.flash("Resuming at \(formatTime(resumeAt))") }
             } catch {
@@ -421,7 +442,7 @@ final class PlayerController {
     /// Remembers where long videos were left so they resume there next time.
     private func savePosition() {
         guard let id = activeVideoId, !activeIsMusic, stream?.isLive != true, duration > 0 else { return }
-        PlaybackPositions.save(currentTime, duration: duration, for: id)
+        WatchHistory.shared.save(currentTime, duration: duration, for: id)
         lastPositionSave = Date()
     }
 
@@ -600,33 +621,5 @@ final class PlayerController {
 
     private func enteringForeground() {
         for l in layers.allObjects { l.player = player }
-    }
-}
-
-/// Per-video resume points for longer videos, kept in UserDefaults (bounded).
-enum PlaybackPositions {
-    private static let key = "playbackPositions.v1"
-    private static let limit = 300
-
-    static func position(for id: String) -> Double? {
-        guard let entry = (UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]])?[id],
-              let t = entry.first, t > 0 else { return nil }
-        return t
-    }
-
-    static func save(_ t: Double, duration: Double, for id: String) {
-        var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]]) ?? [:]
-        if duration >= 300, t > 20, t < duration - 30 {
-            all[id] = [t, Date().timeIntervalSince1970]
-        } else if t > 0 {
-            all[id] = nil                     // short video or watched to the end
-        } else {
-            return
-        }
-        if all.count > limit {
-            let drop = all.sorted { ($0.value.last ?? 0) < ($1.value.last ?? 0) }.prefix(all.count - limit)
-            for (k, _) in drop { all[k] = nil }
-        }
-        UserDefaults.standard.set(all, forKey: key)
     }
 }

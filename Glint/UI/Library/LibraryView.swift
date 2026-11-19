@@ -5,38 +5,77 @@ struct LibraryView: View {
     @Environment(\.screenClass) private var screen
     @State private var playlists: [PlaylistItem] = []
     @State private var loadedGeneration: Int?
+    @State private var confirmClear = false
+    private var history: WatchHistory { WatchHistory.shared }
 
     var body: some View {
-        Group {
-            if accounts.isSignedIn {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        shortcuts
-                        if !playlists.isEmpty {
-                            Text("Playlists").font(.title3.weight(.bold))
-                                .padding(.horizontal, Metrics.gutter(screen))
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: screen == .expanded ? 240 : 160), spacing: 16, alignment: .top)],
-                                      spacing: 20) {
-                                ForEach(playlists) { PlaylistCard(playlist: $0) }
-                            }
-                            .padding(.horizontal, Metrics.gutter(screen))
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 28) {
+                // On this iPhone — works without an account.
+                if !history.continueWatching.isEmpty {
+                    ShelfRow(section: FeedSection(title: "Continue watching", items: history.continueWatching))
+                }
+                if !history.recent.isEmpty {
+                    ShelfRow(section: FeedSection(title: "Recently watched", items: history.recent))
+                }
+
+                if accounts.isSignedIn {
+                    sectionTitle("Your YouTube")
+                    shortcuts
+                    if !playlists.isEmpty {
+                        sectionTitle("Playlists")
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: screen == .expanded ? 240 : 160), spacing: 16, alignment: .top)],
+                                  spacing: 20) {
+                            ForEach(playlists) { PlaylistCard(playlist: $0) }
                         }
+                        .padding(.horizontal, Metrics.gutter(screen))
                     }
-                    .padding(.vertical, 12)
+                } else {
+                    signInCard
                 }
-                .task(id: accounts.generation) {
-                    if loadedGeneration == accounts.generation { return }
-                    playlists = (try? await YouTubeService.shared.libraryPlaylists()) ?? []
-                    loadedGeneration = accounts.generation
+
+                if history.recent.isEmpty {
+                    Label("Videos you watch show up here, so you can pick up where you left off.",
+                          systemImage: "clock.arrow.circlepath")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, Metrics.gutter(screen))
                 }
-                .refreshable {
-                    playlists = (try? await YouTubeService.shared.libraryPlaylists()) ?? playlists
-                }
-            } else {
-                SignInPrompt(message: "Sign in to see your history, Watch later, liked videos and playlists.")
             }
+            .padding(.vertical, 12)
         }
         .navigationTitle("Library")
+        .toolbar {
+            if !history.recent.isEmpty {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button("Clear watch history", systemImage: "trash", role: .destructive) { confirmClear = true }
+                }
+            }
+        }
+        .confirmationDialog("Clear what you've watched on this iPhone?", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("Clear watch history", role: .destructive) { history.clear() }
+        } message: {
+            Text("Removes Continue watching and Recently watched. Your YouTube account history isn't affected.")
+        }
+        .task(id: accounts.generation) {
+            guard accounts.isSignedIn, loadedGeneration != accounts.generation else { return }
+            playlists = (try? await YouTubeService.shared.libraryPlaylists()) ?? []
+            loadedGeneration = accounts.generation
+        }
+        .refreshable {
+            if accounts.isSignedIn {
+                playlists = (try? await YouTubeService.shared.libraryPlaylists()) ?? playlists
+            }
+        }
+    }
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text).font(.title3.weight(.bold)).padding(.horizontal, Metrics.gutter(screen))
+    }
+
+    private var signInCard: some View {
+        SignInCard()
+            .padding(.horizontal, Metrics.gutter(screen))
     }
 
     private var shortcuts: some View {
@@ -57,6 +96,7 @@ struct LibraryView: View {
                             .frame(width: 26)
                         Text(item.0).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                         Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                     }
                     .padding(14)
                     .background(Color.cardFill, in: RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous))
@@ -65,5 +105,26 @@ struct LibraryView: View {
             }
         }
         .padding(.horizontal, Metrics.gutter(screen))
+    }
+}
+
+/// Explains what signing in adds, with one clear action.
+struct SignInCard: View {
+    @State private var showSignIn = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Sign in to YouTube", systemImage: "person.crop.circle.badge.plus")
+                .font(.headline)
+            Text("See your subscriptions, history, Watch later, liked videos and playlists — and add more than one account.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("Sign in") { showSignIn = true }
+                .buttonStyle(.glassProminent)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.cardFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .sheet(isPresented: $showSignIn) { SignInView() }
     }
 }

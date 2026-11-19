@@ -173,7 +173,7 @@ struct HeroCard: View {
     /// Full-bleed thumbnail with the title on a gradient.
     private var compact: some View {
         Button { player.play(video) } label: {
-            Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, corner: 22)
+            Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, corner: 22, videoId: video.id)
                 .overlay {
                     LinearGradient(colors: [.clear, .clear, .black.opacity(0.78)], startPoint: .top, endPoint: .bottom)
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -206,7 +206,7 @@ struct HeroCard: View {
     private var wide: some View {
         HStack(alignment: .center, spacing: 28) {
             Button { player.play(video) } label: {
-                Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, corner: 22)
+                Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, corner: 22, videoId: video.id)
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity)

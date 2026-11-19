@@ -207,6 +207,7 @@ struct WatchView: View {
                     VideoBox()
                         .aspectRatio(16 / 9, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .overlay(alignment: .top) { GrabHandle() }
                         .collapsesPlayer($drag)
                     WatchDetails(channelSheet: $channelSheet)
                 }
@@ -217,6 +218,7 @@ struct WatchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Extend the black stage under the status bar / vertical bar instead of leaving a strip.
                 .background { Color.black.ignoresSafeArea() }
+                .overlay(alignment: .top) { GrabHandle() }
                 .collapsesPlayer($drag)
         }
     }
@@ -344,7 +346,8 @@ struct WatchDetails: View {
                         pill(likes, "hand.thumbsup", interactive: false)
                     }
                     QualityMenu {
-                        pill(player.audioOnly ? "Audio" : (player.selectedOption?.label ?? "Auto"), "slider.horizontal.3")
+                        pill(player.audioOnly ? "Audio only" : "Quality · " + (player.selectedOption?.label ?? "Auto"),
+                             player.audioOnly ? "headphones" : "slider.horizontal.3")
                     }
                     if let id = player.current?.videoId, let url = URL(string: "https://youtu.be/\(id)") {
                         ShareLink(item: url) { pill("Share", "square.and.arrow.up") }
@@ -483,5 +486,18 @@ struct FlowLayout: Layout {
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
         }
+    }
+}
+
+/// Always-visible hint that the player can be swiped down to the mini player.
+struct GrabHandle: View {
+    var body: some View {
+        Capsule()
+            .fill(.white.opacity(0.55))
+            .frame(width: 36, height: 5)
+            .shadow(color: .black.opacity(0.3), radius: 2)
+            .padding(.top, 7)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

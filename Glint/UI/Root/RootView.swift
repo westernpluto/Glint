@@ -1,18 +1,20 @@
 import SwiftUI
+import Observation
 
 /// One system TabView for every size: a tab bar on the outer display, a sidebar on the
 /// inner display, and vertical bars where iPhone Duo uses them. Because the hierarchy
 /// never changes when folding or unfolding, navigation state and playback carry over.
 struct RootView: View {
     @Environment(PlayerController.self) private var player
+    @Environment(AppRouter.self) private var router
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var section: AppSection = .home
     @State private var showSettings = false
 
     var body: some View {
+        let section = Binding(get: { router.section }, set: { router.section = $0 })
         GeometryReader { geo in
             ZStack {
-                TabView(selection: $section) {
+                TabView(selection: section) {
                     Tab(AppSection.home.title, systemImage: AppSection.home.icon, value: AppSection.home) {
                         SectionStack(section: .home, showSettings: $showSettings)
                     }
@@ -47,8 +49,23 @@ struct RootView: View {
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         #if DEBUG
-        .task { await ScreenshotDriver.run(section: $section) }
+        .task { await ScreenshotDriver.run(section: section) }
         #endif
+    }
+}
+
+/// App-wide navigation state that any screen can drive (e.g. Music → Search scoped to Music).
+@MainActor
+@Observable
+final class AppRouter {
+    static let shared = AppRouter()
+    var section: AppSection = .home
+    var searchScope: SearchScope {
+        didSet { UserDefaults.standard.set(searchScope.rawValue, forKey: "searchScope") }
+    }
+
+    private init() {
+        searchScope = SearchScope(rawValue: UserDefaults.standard.string(forKey: "searchScope") ?? "") ?? .youtube
     }
 }
 

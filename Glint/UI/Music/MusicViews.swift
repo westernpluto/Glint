@@ -2,60 +2,40 @@ import SwiftUI
 
 struct MusicHomeView: View {
     @Environment(AccountStore.self) private var accounts
+    @Environment(AppRouter.self) private var router
     @Environment(\.screenClass) private var screen
     @State private var shelves: [MusicShelf] = []
     @State private var loading = false
     @State private var error: Error?
-    @State private var query = ""
-    @State private var submitted = ""
-    @State private var results: MusicPage?
-    @State private var resultsQuery: String?
     @State private var loadedGeneration: Int?
 
     var body: some View {
-        Group {
-            if !submitted.isEmpty {
-                ScrollView {
-                    if let results {
-                        ShelfStack(shelves: results.shelves)
-                    } else {
-                        ProgressView().padding(60)
-                    }
-                }
-                .task(id: submitted) {
-                    guard resultsQuery != submitted else { return }
-                    results = nil
-                    let q = submitted
-                    if let r = try? await YouTubeService.shared.musicSearch(q), q == submitted {
-                        results = r
-                        resultsQuery = q
-                    } else if q == submitted {
-                        results = MusicPage(shelves: [])
-                    }
-                }
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if accounts.isSignedIn { libraryRow }
-                        ShelfStack(shelves: shelves)
-                    }
-                }
-                .overlay {
-                    if shelves.isEmpty && loading { ProgressView().controlSize(.large) }
-                    else if shelves.isEmpty, let error { ErrorState(error: error) { Task { await load() } } }
-                }
-                .refreshable { await load() }
-                .task(id: accounts.generation) {
-                    if loadedGeneration == accounts.generation, !shelves.isEmpty { return }
-                    await load()
-                    loadedGeneration = accounts.generation
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if accounts.isSignedIn { libraryRow }
+                ShelfStack(shelves: shelves)
+            }
+        }
+        .overlay {
+            if shelves.isEmpty && loading { ProgressView().controlSize(.large) }
+            else if shelves.isEmpty, let error { ErrorState(error: error) { Task { await load() } } }
+        }
+        .refreshable { await load() }
+        .task(id: accounts.generation) {
+            if loadedGeneration == accounts.generation, !shelves.isEmpty { return }
+            await load()
+            loadedGeneration = accounts.generation
+        }
+        .navigationTitle("Music")
+        .toolbar {
+            // One search for the whole app: jump to Search, scoped to Music.
+            ToolbarItem(placement: .primaryAction) {
+                Button("Search music", systemImage: "magnifyingglass") {
+                    router.searchScope = .music
+                    router.section = .search
                 }
             }
         }
-        .navigationTitle("Music")
-        .searchable(text: $query, prompt: "Songs, albums, artists")
-        .onSubmit(of: .search) { submitted = query.trimmingCharacters(in: .whitespaces) }
-        .onChange(of: query) { _, q in if q.isEmpty { submitted = "" } }
     }
 
     private var libraryRow: some View {

@@ -118,11 +118,12 @@ struct NowPlayingView: View {
             .pickerStyle(.segmented)
             .frame(width: 180)
             Spacer()
-            QualityMenu {
-                Image(systemName: "ellipsis")
-                    .font(.body.weight(.semibold))
-                    .frame(width: 40, height: 40)
-                    .glassEffect(.regular.interactive(), in: .circle)
+            Group {
+                if player.audioOnly {
+                    MusicMoreMenu { moreIcon }
+                } else {
+                    QualityMenu { moreIcon }
+                }
             }
             .accessibilityLabel("More")
         }
@@ -152,6 +153,13 @@ struct NowPlayingView: View {
         .collapsesPlayer($drag)
     }
 
+    private var moreIcon: some View {
+        Image(systemName: "ellipsis")
+            .font(.body.weight(.semibold))
+            .frame(width: 40, height: 40)
+            .glassEffect(.regular.interactive(), in: .circle)
+    }
+
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(player.current?.title ?? "")
@@ -168,10 +176,11 @@ struct NowPlayingView: View {
     private func transport(showQueueButton: Bool) -> some View {
         GlassEffectContainer(spacing: 20) {
             HStack {
-                Button { player.setRate(player.rate == 1 ? 1.25 : 1) } label: {
+                SpeedMenu {
                     Text(player.rate == 1 ? "1×" : String(format: "%g×", player.rate))
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Playback speed")
                 Spacer()
@@ -317,10 +326,19 @@ struct MiniPlayerAccessory: View {
                 }
                 .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                 if placement != .inline {
-                    Button { player.next() } label: {
-                        Image(systemName: "forward.fill").frame(width: 32, height: 36)
+                    if item.isMusic {
+                        Button { player.next() } label: {
+                            Image(systemName: "forward.fill").frame(width: 32, height: 36)
+                        }
+                        .accessibilityLabel("Next")
                     }
-                    .accessibilityLabel("Next")
+                    Button { player.close() } label: {
+                        Image(systemName: "xmark")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 32, height: 36)
+                    }
+                    .accessibilityLabel("Stop playing")
                 }
             }
             .buttonStyle(.plain)
