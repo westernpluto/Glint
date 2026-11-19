@@ -125,6 +125,7 @@ struct FeedScreen<Header: View>: View {
     @State private var error: Error?
     @State private var loading = false
     @State private var loadingMore = false
+    @State private var moreFailed = false
     @State private var loaded = false
     @State private var loadedKey: AnyHashable?
 
@@ -141,11 +142,21 @@ struct FeedScreen<Header: View>: View {
                 FeedGrid(items: items)
                     .padding(.top, 8)
                 if let token = continuation {
-                    ProgressView()
+                    if moreFailed {
+                        Button("Try again", systemImage: "arrow.clockwise") {
+                            moreFailed = false
+                            Task { await loadMore() }
+                        }
+                        .buttonStyle(.glass)
                         .frame(maxWidth: .infinity)
                         .padding(28)
-                        // Keyed by token: fires again for each new page, even if the spinner never left the screen.
-                        .task(id: token) { await loadMore() }
+                    } else {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(28)
+                            // Keyed by token: fires again for each new page, even if the spinner never left the screen.
+                            .task(id: token) { await loadMore() }
+                    }
                 }
             }
             .padding(.bottom, 24)
@@ -177,7 +188,7 @@ struct FeedScreen<Header: View>: View {
         defer { loading = false }
         do {
             let page = try await load()
-            items = page.items
+            items = Self.unique(page.items, excluding: [])
             continuation = page.continuation
             error = nil
             loadedKey = reloadKey
@@ -190,19 +201,31 @@ struct FeedScreen<Header: View>: View {
             continuation = nil
             loaded = true
         }
+        moreFailed = false
     }
 
     private func loadMore() async {
         guard let token = continuation, !loadingMore else { return }
         loadingMore = true
         defer { loadingMore = false }
-        guard let page = try? await YouTubeService.shared.more(token, endpoint: endpoint) else {
-            continuation = nil
+        let page: FeedPage
+        do {
+            page = try await YouTubeService.shared.more(token, endpoint: endpoint)
+        } catch {
+            // Scrolled away mid-load: keep the token so the spinner retries when it reappears.
+            if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled { return }
+            if continuation == token { moreFailed = true }
             return
         }
-        let known = Set(items.map(\.id))
-        items += page.items.filter { !known.contains($0.id) }
+        guard continuation == token else { return }   // a refresh replaced the feed meanwhile
+        items += Self.unique(page.items, excluding: Set(items.map(\.id)))
         continuation = page.continuation == token ? nil : page.continuation
+    }
+
+    /// Feeds sometimes repeat an item; grid identity needs each once.
+    private static func unique(_ items: [FeedItem], excluding known: Set<String>) -> [FeedItem] {
+        var seen = known
+        return items.filter { seen.insert($0.id).inserted }
     }
 }
 

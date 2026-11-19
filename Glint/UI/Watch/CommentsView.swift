@@ -80,7 +80,16 @@ struct CommentsList: View {
                     .font(.subheadline).foregroundStyle(.secondary)
             } else if comments.isEmpty {
                 if failed {
-                    Text("Couldn't load comments.").font(.subheadline).foregroundStyle(.secondary)
+                    HStack {
+                        Text("Couldn't load comments.").font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Try again", systemImage: "arrow.clockwise") {
+                            loadedToken = nil
+                            Task { await loadFirst() }
+                        }
+                        .font(.subheadline)
+                        .buttonStyle(.glass)
+                    }
                 } else {
                     ProgressView().frame(maxWidth: .infinity).padding(.vertical, 20)
                 }
@@ -106,12 +115,22 @@ struct CommentsList: View {
             loadedToken = token
             failed = page.comments.isEmpty
         } catch {
-            failed = true
+            // Leaving the page cancels the load; only a real failure is worth a message.
+            if !Task.isCancelled, !(error is CancellationError), (error as? URLError)?.code != .cancelled { failed = true }
         }
     }
 
     private func loadMore(_ next: String) async {
-        guard let page = try? await YouTubeService.shared.comments(next) else { continuation = nil; return }
+        let page: CommentPage
+        do {
+            page = try await YouTubeService.shared.comments(next)
+        } catch {
+            // Scrolled past the spinner mid-load: keep the token so it resumes when it's back.
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+            continuation = nil
+            return
+        }
+        guard continuation == next else { return }
         let known = Set(comments.map(\.id))
         comments += page.comments.filter { !known.contains($0.id) }
         continuation = page.continuation == next ? nil : page.continuation
