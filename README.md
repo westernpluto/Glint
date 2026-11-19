@@ -10,13 +10,21 @@ A minimal, ad-free YouTube + YouTube Music client for iPhone, designed for folda
 - **Accounts**: sign in with Google and add as many accounts as you want. Switch from the avatar menu. Shows your Home, Subscriptions, History, Watch later, Liked videos and playlists. Subscribe, like and save to Watch later. Each account has its own session, stored in the Keychain.
 - **YouTube Music**: Home, Explore, Charts, search, albums, artists, playlists, Liked songs and endless radio queues. Audio-only mode, plus a Song/Video switch.
 - **Player**: Picture in Picture, background audio, lock screen and Control Center controls, AirPlay, playback speed, double-tap to seek, drag down to minimise, a mini player that follows you around the app, and autoplay.
-- **Foldable layout**
-  - *Cover screen*: tab bar, full-width cards, stacked watch page. Rotating to landscape goes straight to fullscreen video.
-  - *Inner screen*: sidebar navigation and multi-column grids.
-    - Watch page, landscape: theatre-size player with details, Up next in a column on the right.
-    - Watch page, portrait: wide player on top, details and Up next side by side underneath.
-    - Music: Now playing with the queue alongside.
-  - Playback continues without interruption when you fold or unfold. The app picks its layout from the real window size, so it also works in any other window size.
+- **iPhone Duo layout** (follows Apple's *Preparing your app for iPhone Duo* guidance)
+  - **One system `TabView` (`.sidebarAdaptable`)** for every size.
+    - Outer display: a tab bar, or the vertical bars iOS 27.1 shows on a closed Duo.
+    - Inner display: a sidebar.
+    - The view hierarchy never changes when you fold or unfold, so navigation and playback carry over.
+  - **Mini player** in the system tab bar bottom accessory, so iOS places it correctly next to horizontal or vertical bars.
+  - **`ArrangementView`** for the watch page and Music Now Playing.
+    - Wide display: side by side.
+    - Tall display: stacked.
+    - Half-open: on either side of the fold.
+  - **Immersive player:** an overlay arrangement moves the controls and the video apart at the fold.
+  - **Fold-aware feed grid:** reads the fold's reserved region, so cards never straddle the hinge in book posture.
+  - **Layout decisions** come from size classes and container geometry, never from device type, orientation or screen size.
+  - **Toolbar items** carry an icon and a title, so iOS can place them in vertical bars, horizontal bars or the overflow menu.
+  - **Liquid Glass** controls throughout.
 
 ## Building
 
@@ -27,13 +35,15 @@ The app builds only on GitHub Actions. The workflow is `.github/workflows/build.
 3. Builds an unsigned Release build for devices.
 4. Packages it as **`Glint.ipa`** and uploads it as the `Glint-<version>-build<build>-ipa` artifact. The build log is uploaded too.
 
+A second job, `screenshots`, builds a Debug simulator app and captures the main screens for design review: iPhone Duo outer display, plus an iPad mini as a stand-in for the regular-width inner display. It uploads them as the `screenshots` artifact. The job is informational and never blocks the `.ipa`.
+
 The workflow runs on every push and pull request. You can also start it by hand from the Actions tab (`workflow_dispatch`).
 
 ### Installing
 
 The `.ipa` is unsigned. Sign and install it with your own tool, for example AltStore, SideStore, Sideloadly or `codesign` with your Apple developer certificate. The bundle ID is `com.glint.Glint`; change `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` if you need your own.
 
-Requirements: iOS 18 or later.
+Requirements: iOS 27 or later (built for iPhone Duo; the fold APIs need iOS 27.1).
 
 ### Versioning
 

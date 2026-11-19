@@ -322,9 +322,9 @@ struct WatchDetails: View {
     }
 
     private var actions: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            GlassEffectContainer(spacing: 8) {
-                HStack(spacing: 8) {
+        // Wraps onto more lines in narrow columns instead of clipping or scrolling sideways.
+        GlassEffectContainer(spacing: 8) {
+                FlowLayout(spacing: 8) {
                     if accounts.isSignedIn, let id = player.current?.videoId {
                         Button {
                             let now = !liked
@@ -354,9 +354,7 @@ struct WatchDetails: View {
                     }
                 }
                 .buttonStyle(.plain)
-            }
         }
-        .scrollClipDisabled()
     }
 
     /// One shape, size and material for every action so the row reads as a set.
@@ -450,6 +448,43 @@ struct UpNextList: View {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Left-aligned wrapping layout for pills and chips.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                y += rowHeight + spacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return CGSize(width: min(widest, maxWidth), height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                y += rowHeight + spacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }

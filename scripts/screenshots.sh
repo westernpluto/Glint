@@ -78,10 +78,6 @@ if true; then
       run_scene "$scene" portrait
       t 40 xcrun simctl io "$UDID" screenshot "$OUT/inner-$scene.png" >/dev/null 2>>"$LOG" && note "shot inner-$scene"
     done
-    for scene in home watch nowplaying; do
-      run_scene "$scene" landscape
-      t 40 xcrun simctl io "$UDID" screenshot "$OUT/inner-$scene-landscape.png" >/dev/null 2>>"$LOG" && note "shot inner-$scene-landscape"
-    done
     t 60 xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
     t 60 xcrun simctl delete "$UDID" >/dev/null 2>&1 || true
   fi
