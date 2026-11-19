@@ -31,42 +31,42 @@ done
 
 t 120 xcrun simctl boot "$UDID" || note "boot returned an error"
 t 300 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || note "bootstatus timed out"
-t 30 xcrun simctl io "$UDID" enumerate > "$OUT/enumerate.txt" 2>&1 || true
+t 90 xcrun simctl io "$UDID" enumerate > "$OUT/enumerate.txt" 2>&1 || true
 t 30 xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3 >/dev/null 2>&1 || true
 t 30 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
 t 120 xcrun simctl install "$UDID" "$APP" || { note "install failed"; exit 0; }
 
-shoot() {  # name
-  local any=0
-  for d in 1 2; do
-    if t 30 xcrun simctl io "$UDID" screenshot --display="$d" "$OUT/$1-d$d.png" >/dev/null 2>>"$LOG"; then any=1; fi
-  done
-  if [ "$any" = 0 ]; then t 30 xcrun simctl io "$UDID" screenshot "$OUT/$1.png" >/dev/null 2>>"$LOG" || true; fi
-  note "shot $1"
+shot() {  # display name
+  t 40 xcrun simctl io "$UDID" screenshot --display="$1" "$OUT/$2.png" >/dev/null 2>>"$LOG" \
+    && note "shot $2" || note "screenshot failed: $2"
 }
 
-power() {  # display on|off
-  t 30 xcrun simctl io "$UDID" screenConfig --display="$1" power "$2" >>"$LOG" 2>&1 || note "power $1 $2 failed"
-}
-
-for scene in home watch nowplaying music search mini; do
+run_scene() {  # scene
   t 20 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
-  t 60 xcrun simctl launch "$UDID" "$BUNDLE" -GlintScene "$scene" -GlintQuery "4k nature" >/dev/null || note "launch failed: $scene"
+  t 60 xcrun simctl launch "$UDID" "$BUNDLE" -GlintScene "$1" -GlintQuery "4k nature" >/dev/null || note "launch failed: $1"
   sleep 16
-  shoot "$scene-A"
-  # Simulate folding/unfolding: swap which display is powered, then restore.
-  power 1 off; power 2 on; sleep 6; shoot "$scene-B"
-  power 2 off; power 1 on; sleep 6; shoot "$scene-C"
-  power 2 on
+}
+
+# Phase 1: the outer display (the default when the simulated device is closed).
+for scene in home watch nowplaying music search mini library; do
+  run_scene "$scene"
+  shot 1 "outer-$scene"
+done
+t 30 xcrun simctl ui "$UDID" appearance dark >/dev/null 2>&1 || true
+run_scene home; shot 1 "outer-home-dark"
+run_scene watch; shot 1 "outer-watch-dark"
+t 30 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
+
+# Phase 2: "open" the device — power the inner display, switch the outer one off.
+t 30 xcrun simctl io "$UDID" screenConfig --display=2 power on >>"$LOG" 2>&1 || note "inner power on failed"
+t 30 xcrun simctl io "$UDID" screenConfig --display=1 power off >>"$LOG" 2>&1 || note "outer power off failed"
+sleep 15
+t 90 xcrun simctl io "$UDID" enumerate > "$OUT/enumerate-open.txt" 2>&1 || true
+for scene in home watch nowplaying music; do
+  run_scene "$scene"
+  shot 2 "inner-$scene"
 done
 
-t 30 xcrun simctl ui "$UDID" appearance dark >/dev/null 2>&1 || true
-t 20 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
-t 60 xcrun simctl launch "$UDID" "$BUNDLE" -GlintScene home >/dev/null || true
-sleep 14
-shoot "home-dark"
-
-t 30 xcrun simctl io "$UDID" enumerate > "$OUT/enumerate-end.txt" 2>&1 || true
 t 60 xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
 t 60 xcrun simctl delete "$UDID" >/dev/null 2>&1 || true
 ls -la "$OUT"
