@@ -109,7 +109,7 @@ actor SabrSession {
     /// Media segment `number` (1-based, as SABR counts) of a format.
     func segment(_ itag: Int, number: Int) async throws -> Data {
         let key = Key(itag: itag, number: number)
-        if let d = cache[key] { return d }
+        if let d = cache[key] { prefetch(after: number, itag: itag); return d }
         guard let f = format(itag) else { throw SabrFailure.noMedia }
         if !f.isAudio, currentVideo?.itag != itag { currentVideo = f; audioOnly = false }
         if indexes[itag] == nil { _ = try await initSegment(itag) }
@@ -121,10 +121,27 @@ actor SabrSession {
                 if await self.cached(key) { return }
                 try await self.request(atMs: at + Double(attempt) * 200, wantInitFor: nil)
             }
-            if let d = cache[key] { return d }
+            if let d = cache[key] { prefetch(after: number, itag: itag); return d }
         }
         throw SabrFailure.noMedia
     }
+
+    /// Fetch ahead so the next segments are cached before AVPlayer asks (it gives up on a
+    /// segment after a few seconds without an answer). One prefetch at a time.
+    private var prefetching = false
+
+    private func prefetch(after number: Int, itag: Int) {
+        guard !prefetching, let count = indexes[itag]?.count, number < count else { return }
+        let ahead = (number + 1)...min(number + 3, count)
+        guard let missing = ahead.first(where: { cache[Key(itag: itag, number: $0)] == nil }) else { return }
+        prefetching = true
+        Task {
+            _ = try? await self.segment(itag, number: missing)
+            await self.prefetchFinished()
+        }
+    }
+
+    private func prefetchFinished() { prefetching = false }
 
     // MARK: Plumbing
 
