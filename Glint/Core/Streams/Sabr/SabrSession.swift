@@ -98,6 +98,14 @@ actor SabrSession {
 
     func setAudioOnly(_ value: Bool) { audioOnly = value }
 
+    /// Drop cached media (keeps init segments and indexes): this session isn't playing.
+    func trim() {
+        inFlight?.cancel()
+        cache = [:]
+        cacheOrder = []
+        cacheBytes = 0
+    }
+
     /// ftyp + moov of a format (what HLS's EXT-X-MAP wants; the sidx is left out).
     func initSegment(_ itag: Int) async throws -> Data {
         guard let f = format(itag) else { throw SabrFailure.noMedia }
@@ -363,16 +371,32 @@ actor SabrSession {
             cache[key] = data
             cacheOrder.append(key)
             cacheBytes += data.count
-            while cacheBytes > cacheLimit, cacheOrder.count > 1 {
-                let old = cacheOrder.removeFirst()
-                cacheBytes -= cache.removeValue(forKey: old)?.count ?? 0
-            }
+            if cacheBytes > cacheLimit { evict() }
         }
         // Wake whoever was waiting for exactly this.
         let ready = waiters.filter { $0.key == key }
         guard !ready.isEmpty else { return }
         waiters.removeAll { $0.key == key }
         for w in ready { w.continuation.resume() }
+    }
+
+    /// Over the limit: first what lies more than a minute behind playback, then the oldest.
+    private func evict() {
+        let behind = lastPositionMs - 60_000
+        if behind > 0 {
+            let old = cacheOrder.filter { k in
+                guard let idx = indexes[k.itag], k.number >= 1, k.number <= idx.count else { return true }
+                return idx[k.number - 1].start + idx[k.number - 1].duration < behind
+            }
+            for k in old where cacheBytes > cacheLimit * 3 / 4 {
+                cacheBytes -= cache.removeValue(forKey: k)?.count ?? 0
+            }
+            cacheOrder.removeAll { cache[$0] == nil }
+        }
+        while cacheBytes > cacheLimit, cacheOrder.count > 1 {
+            let old = cacheOrder.removeFirst()
+            cacheBytes -= cache.removeValue(forKey: old)?.count ?? 0
+        }
     }
 
     private static func formatId(_ f: DashFormat, _ w: inout ProtoWriter) {

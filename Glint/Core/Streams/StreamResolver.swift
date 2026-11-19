@@ -139,7 +139,7 @@ final class StreamResolver: @unchecked Sendable {
     func resolve(videoId: String) async throws -> ResolvedStream {
         if let hit = cached(videoId) { return hit }
         let stream = try await resolveFresh(videoId: videoId)
-        if !stream.isLive, stream.sabr == nil { store(stream, for: videoId) }
+        if !stream.isLive { store(stream, for: videoId) }
         return stream
     }
 

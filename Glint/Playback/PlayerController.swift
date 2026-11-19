@@ -619,7 +619,14 @@ final class PlayerController {
         // SABR after a pause: the app may have been suspended and lost its loopback server.
         if stream?.sabr != nil, let p = pausedAt, Date().timeIntervalSince(p) > 20 {
             pausedAt = nil
-            restartSabrServer("resuming after a pause", force: true)
+            Task { @MainActor in
+                if await SabrServer.shared.isAlive() {
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    self.player.playImmediately(atRate: self.rate)
+                } else {
+                    self.restartSabrServer("resuming after a pause", force: true)
+                }
+            }
             return
         }
         pausedAt = nil

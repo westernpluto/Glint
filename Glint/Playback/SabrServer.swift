@@ -45,11 +45,28 @@ final class SabrServer: @unchecked Sendable {
         try await start()
     }
 
+    /// Whether the listener still answers (iOS may have taken it while the app was suspended).
+    func isAlive() async -> Bool {
+        guard let port = queue.sync(execute: { listener != nil ? port : nil }),
+              let url = URL(string: "http://127.0.0.1:\(port)/health") else { return false }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 1
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 1
+        let session = URLSession(configuration: cfg)
+        defer { session.finishTasksAndInvalidate() }
+        guard let (_, resp) = try? await session.data(for: req) else { return false }
+        return (resp as? HTTPURLResponse)?.statusCode == 200
+    }
+
     /// Called when the app returns to the foreground.
     func ensureRunning() {
         let hasSessions = queue.sync { !sessions.isEmpty }
         guard hasSessions else { return }
-        Task { try? await restart() }
+        Task {
+            if await isAlive() { return }
+            try? await restart()
+        }
     }
 
     private func makeListener(on wanted: UInt16?) {
@@ -119,9 +136,12 @@ final class SabrServer: @unchecked Sendable {
         queue.sync {
             guard let port else { return nil }
             if sessions[session.id] == nil {
+                // Older sessions give their segment memory back (they keep init segments, so
+                // going back to one is still quick).
+                for old in sessions.values { Task { await old.trim() } }
                 sessions[session.id] = session
                 order.append(session.id)
-                while order.count > 3 { sessions[order.removeFirst()] = nil }
+                while order.count > 2 { sessions[order.removeFirst()] = nil }
             }
             selectedVideos[session.id] = audioOnly ? [] : videos
             let base = "http://127.0.0.1:\(port)/\(session.id)/"
@@ -164,6 +184,7 @@ final class SabrServer: @unchecked Sendable {
             .map { String($0.dropFirst("range:".count)).trimmingCharacters(in: .whitespaces) }
 
         let comps = path.split(separator: "/").map(String.init)
+        if comps == ["health"] { return respond(conn, status: 200, body: Data("ok".utf8)) }
         guard comps.count == 2, let session = sessions[comps[0]] else {
             return respond(conn, status: 404, body: Data())
         }
