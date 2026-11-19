@@ -89,6 +89,8 @@ struct WatchExtras {
     var dateText: String?
     var related: [VideoItem]
     var relatedContinuation: String?
+    var commentsToken: String? = nil
+    var commentCount: String? = nil
 }
 
 // MARK: Music

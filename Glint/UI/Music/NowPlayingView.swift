@@ -8,6 +8,7 @@ struct NowPlayingView: View {
     @Environment(PlayerController.self) private var player
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showQueue = false
+    @State private var sheetTab: MusicSidePanel.Tab = .queue
 
     var body: some View {
         let regular = horizontalSizeClass == .regular
@@ -15,8 +16,8 @@ struct NowPlayingView: View {
             .background { backdrop }
             .sheet(isPresented: $showQueue) {
                 NavigationStack {
-                    QueueList()
-                        .navigationTitle("Up next")
+                    MusicSidePanel(tab: sheetTab)
+                        .navigationTitle(sheetTab == .queue ? "Up next" : "Lyrics")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .topBarPinnedTrailing) {
@@ -35,7 +36,7 @@ struct NowPlayingView: View {
                 ArrangementView {
                     playerColumn(showQueueButton: false).splitArrangementLayoutRatio(0.62)
                 } secondary: {
-                    QueueList()
+                    MusicSidePanel()
                 }
                 .arrangementViewStyle(.split)
             } else {
@@ -43,14 +44,14 @@ struct NowPlayingView: View {
                 ArrangementView {
                     playerColumn(showQueueButton: true)
                 } secondary: {
-                    QueueList()
+                    MusicSidePanel()
                 }
                 .arrangementViewStyle(.split.axes(.horizontal))
             }
         } else if regular {
             HStack(spacing: 0) {
                 playerColumn(showQueueButton: false)
-                QueueList().frame(width: 400)
+                MusicSidePanel().frame(width: 400)
             }
         } else {
             playerColumn(showQueueButton: true)
@@ -87,6 +88,20 @@ struct NowPlayingView: View {
                     .foregroundStyle(.secondary)
                 }
                 transport(showQueueButton: showQueueButton)
+                if showQueueButton {
+                    HStack {
+                        Button { sheetTab = .lyrics; showQueue = true } label: {
+                            Label("Lyrics", systemImage: "quote.bubble")
+                        }
+                        Spacer()
+                        Button { sheetTab = .queue; showQueue = true } label: {
+                            Label("Up next", systemImage: "list.bullet")
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                }
                 if let n = player.notice {
                     Text(n).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity)
                 } else if let e = player.loadError {
@@ -216,14 +231,8 @@ struct NowPlayingView: View {
                 }
                 .accessibilityLabel("Next")
                 Spacer()
-                if showQueueButton {
-                    Button { showQueue = true } label: {
-                        Image(systemName: "list.bullet").font(.title3.weight(.semibold)).frame(width: 44, height: 44)
-                    }
-                    .accessibilityLabel("Up next")
-                } else {
-                    Color.clear.frame(width: 44, height: 44)
-                }
+                // Balances the speed control on the leading side.
+                Color.clear.frame(width: 44, height: 44)
             }
             .foregroundStyle(.primary)
             .buttonStyle(.plain)
@@ -349,5 +358,74 @@ struct MiniPlayerAccessory: View {
                 Button(role: .destructive) { player.close() } label: { Label("Stop playing", systemImage: "xmark") }
             }
         }
+    }
+}
+
+/// Up next and Lyrics in one column, switched with a segmented control.
+struct MusicSidePanel: View {
+    enum Tab: String, CaseIterable, Identifiable {
+        case queue = "Up next", lyrics = "Lyrics"
+        var id: String { rawValue }
+    }
+    @State var tab: Tab = .queue
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Show", selection: $tab) {
+                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            switch tab {
+            case .queue: QueueList()
+            case .lyrics: LyricsView()
+            }
+        }
+    }
+}
+
+struct LyricsView: View {
+    @Environment(PlayerController.self) private var player
+    @State private var text: String?
+    @State private var source: String?
+    @State private var loadedFor: String?
+    @State private var loading = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if loading {
+                    ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                } else if let text {
+                    Text(text)
+                        .font(.title3.weight(.semibold))
+                        .lineSpacing(8)
+                        .textSelection(.enabled)
+                    if let source {
+                        Text(source).font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    ContentUnavailableView("No lyrics for this song", systemImage: "quote.bubble")
+                        .padding(.top, 30)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+        }
+        .task(id: player.current?.videoId) { await load() }
+    }
+
+    private func load() async {
+        guard let id = player.current?.videoId, id != loadedFor else { return }
+        loading = true
+        text = nil
+        source = nil
+        let result = await YouTubeService.shared.lyrics(videoId: id)
+        guard player.current?.videoId == id else { return }
+        text = result?.text
+        source = result?.source
+        loadedFor = id
+        loading = false
     }
 }

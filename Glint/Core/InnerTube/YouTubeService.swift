@@ -264,7 +264,19 @@ final class YouTubeService: @unchecked Sendable {
             likeCount: likes,
             dateText: primary["dateText"].text ?? primary["relativeDateText"].text,
             related: related.items.compactMap(\.video),
-            relatedContinuation: related.continuation)
+            relatedContinuation: related.continuation,
+            commentsToken: results.findAll("itemSectionRenderer")
+                .first { $0["sectionIdentifier"].string == "comment-item-section" }?
+                .first("continuationCommand")?["token"].string,
+            commentCount: json["engagementPanels"].array
+                .first { ($0.first("panelIdentifier")?.string ?? "").contains("comment") }?
+                .first("contextualInfo")?.text)
+    }
+
+    /// A page of comments (or of a thread's replies) from a continuation token.
+    func comments(_ token: String) async throws -> CommentPage {
+        let json = try await tube.call("next", body: ["continuation": token])
+        return CommentParser.page(json)
     }
 
     func setSubscribed(_ on: Bool, channelId: String) async throws {
@@ -340,6 +352,19 @@ final class YouTubeService: @unchecked Sendable {
     func musicLibraryPlaylists() async throws -> MusicPage {
         guard tube.isSignedIn else { throw InnerTubeError.notSignedIn }
         return try await musicBrowse("FEmusic_liked_playlists")
+    }
+
+    /// Song lyrics (plain text) and their credit line, when YouTube Music has them.
+    func lyrics(videoId: String) async -> (text: String, source: String?)? {
+        guard let next = try? await tube.call("next", client: .webRemix, body: ["videoId": videoId, "isAudioOnly": true]),
+              let id = next.findAll("tabRenderer")
+                .compactMap({ $0.at("endpoint.browseEndpoint.browseId").string })
+                .first(where: { $0.hasPrefix("MPLY") }),
+              let page = try? await tube.call("browse", client: .webRemix, body: ["browseId": id]),
+              let shelf = page.first("musicDescriptionShelfRenderer"),
+              let text = shelf["description"].text, !text.isEmpty
+        else { return nil }
+        return (text, shelf["footer"].text)
     }
 
     /// Radio / album / playlist queue for a track.

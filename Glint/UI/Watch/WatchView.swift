@@ -170,6 +170,7 @@ struct WatchView: View {
             }
         }
         .onChange(of: player.current?.videoId) { _, _ in channelSheet = nil }
+        .handlesSeekLinks()
     }
 
     @ViewBuilder
@@ -228,16 +229,17 @@ struct WatchView: View {
     private func secondary(wide: Bool) -> some View {
         ScrollView {
             if wide {
-                UpNextList().padding(.horizontal, 16).padding(.vertical, 20)
+                WatchSidePanel().padding(.horizontal, 16).padding(.vertical, 20)
             } else if screen == .expanded {
                 HStack(alignment: .top, spacing: 28) {
                     WatchDetails(channelSheet: $channelSheet).frame(maxWidth: .infinity)
-                    UpNextList().frame(maxWidth: 420)
+                    WatchSidePanel().frame(maxWidth: 420)
                 }
                 .padding(24)
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     WatchDetails(channelSheet: $channelSheet)
+                    CommentsPreview()
                     UpNextList()
                 }
                 .padding(.horizontal, 16)
@@ -369,7 +371,7 @@ struct WatchDetails: View {
 
     private func description(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(linkified(text))
+            Text(richText(text))
                 .font(.subheadline)
                 .lineLimit(expanded ? nil : 4)
                 .textSelection(.enabled)
@@ -381,19 +383,6 @@ struct WatchDetails: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.cardFill, in: RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous))
-    }
-
-    private func linkified(_ s: String) -> AttributedString {
-        var a = AttributedString(s)
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return a }
-        let ns = s as NSString
-        for m in detector.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
-            guard let url = m.url, let r = Range(m.range, in: s),
-                  let lower = AttributedString.Index(r.lowerBound, within: a),
-                  let upper = AttributedString.Index(r.upperBound, within: a) else { continue }
-            a[lower..<upper].link = url
-        }
-        return a
     }
 }
 
