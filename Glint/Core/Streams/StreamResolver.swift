@@ -194,7 +194,13 @@ final class StreamResolver: @unchecked Sendable {
             }
             stream.clientKey = client.key
             if stream.hlsURL != nil { trace?("\(client.key): \(stream.isLive ? "live " : "")HLS, \(stream.options.count) qualities"); return stream }
-            if stream.progressiveURL != nil, stream.audio == nil { trace?("\(client.key): only the 360p muxed file has a link"); return stream }
+            if stream.progressiveURL != nil, stream.audio == nil {
+                // Full length but 360p: keep it in case nothing better turns up (the Safari
+                // WEB client may still get HD over HLS).
+                trace?("\(client.key): only the 360p muxed file has a link; trying the others for HD")
+                if progressive == nil { progressive = stream }
+                continue
+            }
             let check = await reachability(stream, userAgent: client.userAgent)
             trace?("\(client.key): \(stream.options.count) qualities, audio \(stream.audio.map { "itag \($0.itag)" } ?? "none"), check \(check.description)")
             if check.ok { return stream }
