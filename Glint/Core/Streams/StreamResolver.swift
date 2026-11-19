@@ -136,14 +136,21 @@ final class StreamResolver: @unchecked Sendable {
         }
     }
 
-    func resolve(videoId: String) async throws -> ResolvedStream {
+    /// What playback is about to do, so a SABR session's first request can fetch exactly that.
+    struct Hints: Sendable {
+        var startAt: Double = 0
+        var audioOnly = false
+        var defaultQuality = 0
+    }
+
+    func resolve(videoId: String, hints: Hints = Hints()) async throws -> ResolvedStream {
         if let hit = cached(videoId) { return hit }
-        let stream = try await resolveFresh(videoId: videoId)
+        let stream = try await resolveFresh(videoId: videoId, hints: hints)
         if !stream.isLive { store(stream, for: videoId) }
         return stream
     }
 
-    private func resolveFresh(videoId: String, isRetry: Bool = false) async throws -> ResolvedStream {
+    private func resolveFresh(videoId: String, hints: Hints, isRetry: Bool = false) async throws -> ResolvedStream {
         var lastReason: String?
         var limited: ResolvedStream?
         var progressive: ResolvedStream?
@@ -162,16 +169,19 @@ final class StreamResolver: @unchecked Sendable {
             var playerToken: String?
             if client.isWebPlayback {
                 if tube.visitorData == nil { await tube.warmUp() }
+                // A token bound to the video, sent with the request like the website does (it's
+                // what YouTube looks at before asking "are you a bot?"); minted while the player
+                // script loads.
+                let visitorData = tube.visitorData
+                async let token = Self.videoToken(videoId, visitorData: visitorData)
                 do { webPlayer = try await JSChallengeSolver.shared.player(session: tube.session) } catch {
                     trace?("\(client.key): player script unavailable (\(error.localizedDescription))")
+                    _ = await token
                     continue
                 }
-                // A token bound to the video, sent with the request like the website does;
-                // it's what YouTube looks at before asking "are you a bot?".
-                do {
-                    playerToken = try await PoTokenProvider.shared.token(for: videoId, visitorData: tube.visitorData)
-                } catch {
-                    trace?("\(client.key): player PO token failed (\(error.localizedDescription))")
+                switch await token {
+                case .success(let t): playerToken = t
+                case .failure(let e): trace?("\(client.key): player PO token failed (\(e.localizedDescription))")
                 }
             }
             var json: JSON
@@ -191,7 +201,7 @@ final class StreamResolver: @unchecked Sendable {
                 continue
             }
             if let webPlayer { json = await prepareWebFormats(json, client: client, player: webPlayer, videoToken: playerToken) }
-            guard var stream = await build(json, client: client) else {
+            guard var stream = await build(json, client: client, hints: hints) else {
                 if client.isWebPlayback { answeredWithoutLinks = true }
                 trace?("\(client.key): no usable formats")
                 continue
@@ -255,7 +265,7 @@ final class StreamResolver: @unchecked Sendable {
                 tube.visitorData = nil
                 await tube.warmUp()
                 await PoTokenProvider.shared.reset()
-                return try await resolveFresh(videoId: videoId, isRetry: true)
+                return try await resolveFresh(videoId: videoId, hints: hints, isRetry: true)
             }
             if answeredWithoutLinks {
                 throw InnerTubeError.unplayable("YouTube let your account through but sent no stream Glint can play for this video (only its own streaming format). Try again later.")
@@ -269,7 +279,7 @@ final class StreamResolver: @unchecked Sendable {
 
     /// A SABR-backed stream: the same adaptive formats, fetched through `SabrSession` and served
     /// to AVPlayer as HLS by `SabrServer`. The first request (audio from the start) must answer.
-    private func sabrStream(_ json: JSON, details: VideoDetails, client: ClientProfile) async -> ResolvedStream? {
+    private func sabrStream(_ json: JSON, details: VideoDetails, client: ClientProfile, hints: Hints) async -> ResolvedStream? {
         let sd = json["streamingData"]
         guard let s = sd[Self.sabrURLKey].string, let url = URL(string: s),
               let configText = json.at("playerConfig.mediaCommonConfig.mediaUstreamerRequestConfig.videoPlaybackUstreamerConfig").string,
@@ -295,7 +305,11 @@ final class StreamResolver: @unchecked Sendable {
                                   videos: options.compactMap { if case .dash(let f) = $0.source { return f }; return nil })
         do {
             try await SabrServer.shared.start()
-            try await session.prepare()
+            // Audio plus the video Auto will play, from where playback starts: one round trip
+            // gets both init segments and the first media.
+            let video = hints.audioOnly ? nil : SabrBandwidth.autoVideo(
+                session.videos, audioBitrate: audio.bitrate, defaultQuality: hints.defaultQuality)
+            try await session.prepare(video: video, atMs: max(0, hints.startAt) * 1000)
         } catch {
             trace?("\(client.key): SABR failed (\(error.localizedDescription))")
             return nil
@@ -375,19 +389,24 @@ final class StreamResolver: @unchecked Sendable {
         return (200..<300).contains(status) ? nil : "segment \(status)"
     }
 
+    private static func videoToken(_ videoId: String, visitorData: String?) async -> Result<String, Error> {
+        do { return .success(try await PoTokenProvider.shared.token(for: videoId, visitorData: visitorData)) }
+        catch { return .failure(error) }
+    }
+
     private static func isBotCheck(_ reason: String?) -> Bool {
         guard let r = reason?.lowercased() else { return false }
         return r.contains("not a bot") || (r.contains("sign in") && r.contains("confirm"))
     }
 
-    private func build(_ json: JSON, client: ClientProfile) async -> ResolvedStream? {
+    private func build(_ json: JSON, client: ClientProfile, hints: Hints = Hints()) async -> ResolvedStream? {
         let details = Self.details(json["videoDetails"], microformat: json.at("microformat.playerMicroformatRenderer"))
         let sd = json["streamingData"]
 
         let formats = sd["adaptiveFormats"].array.compactMap { DashFormat($0) }
 
         // No direct links: YouTube's own protocol (SABR) gets every quality with separate audio.
-        if formats.isEmpty, !details.isLive, let stream = await sabrStream(json, details: details, client: client) {
+        if formats.isEmpty, !details.isLive, let stream = await sabrStream(json, details: details, client: client, hints: hints) {
             return stream
         }
 

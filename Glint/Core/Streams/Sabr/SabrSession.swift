@@ -90,10 +90,14 @@ actor SabrSession {
 
     // MARK: Public
 
-    /// First request (audio, from the start): proves SABR answers and caches the audio init.
-    func prepare() async throws {
-        audioOnly = true
-        _ = try await initSegment(audio.itag)
+    /// First request: audio and (unless audio only) the video that will play, from where
+    /// playback will start. Returns once the audio init is in (proves SABR answers); the rest
+    /// of the answer keeps streaming into the cache.
+    func prepare(video: DashFormat?, atMs: Double) async throws {
+        if let video, format(video.itag) != nil { select(video) } else { audioOnly = true }
+        lastPositionMs = atMs
+        try await fetch(Key(itag: audio.itag, number: 0), atMs: atMs)
+        guard inits[audio.itag] != nil else { throw lastError ?? SabrFailure.noMedia }
     }
 
     func setAudioOnly(_ value: Bool) { audioOnly = value }
@@ -294,6 +298,8 @@ actor SabrSession {
         req.timeoutInterval = 30
 
         var parser = UMPStreamParser()
+        var firstByte: Date?
+        var received = 0
         var pending: [Int: (itag: Int, isInit: Bool, number: Int, data: Data)] = [:]
         var redirected = false
         var mediaCount = 0
@@ -304,6 +310,7 @@ actor SabrSession {
                 guard code == 200 else { throw SabrFailure.http(code) }
                 continue
             case .data(let chunk):
+                if firstByte == nil { firstByte = Date() } else { received += chunk.count }
                 parts = parser.feed(chunk)
             }
             for part in parts {
@@ -337,6 +344,7 @@ actor SabrSession {
                 }
             }
         }
+        if let firstByte { SabrBandwidth.record(bytes: received, seconds: Date().timeIntervalSince(firstByte)) }
         return redirected && mediaCount == 0
     }
 
@@ -449,5 +457,44 @@ final class SabrStreamer: NSObject, URLSessionDataDelegate, @unchecked Sendable 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let c = lock.withLock { streams.removeValue(forKey: task.taskIdentifier) }
         if let error { c?.finish(throwing: error) } else { c?.finish() }
+    }
+}
+
+/// Download speed seen on SABR answers (time to first byte left out), kept across launches.
+/// Auto quality is picked from it: AVPlayer can't judge, it only sees the loopback server.
+enum SabrBandwidth {
+    private static let lock = NSLock()
+    private static let key = "sabrBandwidthBps"
+    nonisolated(unsafe) private static var estimate: Double? = {
+        let v = UserDefaults.standard.double(forKey: key)
+        return v > 0 ? v : nil
+    }()
+
+    static func record(bytes: Int, seconds: Double) {
+        guard bytes > 512 * 1024, seconds > 0.05 else { return }   // small answers say little
+        let sample = Double(bytes) * 8 / seconds
+        let v: Double = lock.withLock {
+            let next = estimate.map { $0 * 0.7 + sample * 0.3 } ?? sample
+            estimate = next
+            return next
+        }
+        UserDefaults.standard.set(v, forKey: key)
+    }
+
+    static var bitsPerSecond: Double? { lock.withLock { estimate } }
+
+    /// The best of `videos` (best first) for Auto: the user's default quality when set; else
+    /// what the measured speed carries with headroom (video + audio × 1.5), up to 4K; 1080p
+    /// before anything has been measured.
+    static func autoVideo(_ videos: [DashFormat], audioBitrate: Int, defaultQuality: Int) -> DashFormat? {
+        guard !videos.isEmpty else { return nil }
+        let lines: (DashFormat) -> Int = { $0.width > 0 ? min($0.width, $0.height) : $0.height }
+        if defaultQuality > 0 {
+            return videos.first { lines($0) <= defaultQuality } ?? videos.last
+        }
+        guard let bps = bitsPerSecond else {
+            return videos.first { lines($0) <= 1080 } ?? videos.last
+        }
+        return videos.first { lines($0) <= 2160 && Double($0.bitrate + audioBitrate) * 1.5 <= bps } ?? videos.last
     }
 }

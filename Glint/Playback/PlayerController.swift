@@ -384,7 +384,11 @@ final class PlayerController {
             async let sbTask: [SponsorSegment] = Self.fetchSegments(videoId, enabled: sbEnabled, categories: sbCategories)
             guard let self else { return }
             do {
-                let s = try await StreamResolver.shared.resolve(videoId: videoId)
+                let hints = StreamResolver.Hints(
+                    startAt: isMusic ? 0 : WatchHistory.shared.position(for: videoId) ?? 0,
+                    audioOnly: self.audioOnly,
+                    defaultQuality: self.settings.defaultQuality)
+                let s = try await StreamResolver.shared.resolve(videoId: videoId, hints: hints)
                 guard !Task.isCancelled, self.current?.videoId == videoId else { return }
                 self.stream = s
                 self.details = s.details
@@ -466,10 +470,10 @@ final class PlayerController {
                 // SABR: segments come from YouTube's own protocol through the loopback server.
                 // Auto offers one quality: AVPlayer measures the loopback server (cached segments
                 // arrive instantly), so left to itself it climbs past what the connection carries.
-                if selectedOption == nil, videos.count > 1 {
-                    let cap = settings.defaultQuality > 0 ? settings.defaultQuality : 1080
-                    let lines: (DashFormat) -> Int = { $0.width > 0 ? min($0.width, $0.height) : $0.height }
-                    videos = [videos.first { lines($0) <= cap } ?? videos[videos.count - 1]]
+                if selectedOption == nil, videos.count > 1,
+                   let pick = SabrBandwidth.autoVideo(videos, audioBitrate: s.audio?.bitrate ?? 0,
+                                                      defaultQuality: settings.defaultQuality) {
+                    videos = [pick]
                 }
                 let audioOnly = videos.isEmpty
                 Task { await sabr.setAudioOnly(audioOnly) }
@@ -651,7 +655,9 @@ final class PlayerController {
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             do {
-                let s = try await StreamResolver.shared.resolve(videoId: id)
+                let hints = StreamResolver.Hints(startAt: time, audioOnly: self?.audioOnly ?? false,
+                                                       defaultQuality: self?.settings.defaultQuality ?? 0)
+                let s = try await StreamResolver.shared.resolve(videoId: id, hints: hints)
                 guard let self, !Task.isCancelled, self.current?.videoId == id else { return }
                 self.stream = s
                 self.resolvedAt = Date()
@@ -783,7 +789,8 @@ final class PlayerController {
         else { nextId = nil }
         guard let nextId else { return }
         prefetchedNext = true
-        Task.detached(priority: .utility) { _ = try? await StreamResolver.shared.resolve(videoId: nextId) }
+        let hints = StreamResolver.Hints(startAt: 0, audioOnly: audioOnly, defaultQuality: settings.defaultQuality)
+        Task.detached(priority: .utility) { _ = try? await StreamResolver.shared.resolve(videoId: nextId, hints: hints) }
     }
 
     private func sponsorCheck(_ t: Double) {
