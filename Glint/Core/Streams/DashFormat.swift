@@ -18,6 +18,8 @@ struct DashFormat: Hashable {
     var indexRange: ClosedRange<Int>
     var durationMs: Int
     var isAudio: Bool
+    /// File size in bytes (0 if YouTube didn't say).
+    var contentLength: Int
 
     init?(_ f: JSON) {
         guard let s = f["url"].string, let url = URL(string: s),
@@ -43,6 +45,9 @@ struct DashFormat: Hashable {
         self.indexRange = x0...x1
         self.durationMs = Int(f["approxDurationMs"].string ?? "") ?? 0
         self.isAudio = mime.hasPrefix("audio")
+        self.contentLength = Int(f["contentLength"].string ?? "")
+            ?? URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .first { $0.name == "clen" }?.value.flatMap { Int($0) } ?? 0
         if f["isDrc"].bool == true { return nil }  // skip dynamic-range-compressed duplicates
     }
 

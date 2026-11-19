@@ -48,6 +48,8 @@ struct ResolvedStream {
     var streamUserAgent: String
     var isLive: Bool
     var captions: [CaptionTrack] = []
+    /// Which client produced these links (see `StreamResolver.reportFailure`).
+    var clientKey: String = ""
 
     /// Video formats suitable for "Auto" (one per resolution, decodable).
     var autoFormats: [DashFormat] {
@@ -62,8 +64,33 @@ final class StreamResolver: @unchecked Sendable {
     /// Returns true when the device can decode a codec string such as `av01.0.12M.08`.
     var codecSupported: (String) -> Bool = { _ in true }
 
-    /// Clients tried in order. ANDROID_VR returns direct URLs without proof-of-origin tokens.
-    var clients: [ClientProfile] = [.androidVR, .ios]
+    /// Clients tried in order; all return direct URLs without proof-of-origin tokens.
+    /// Some versions only get the first part of each stream, which `reachesEnd` catches.
+    var clients: [ClientProfile] = [.androidVR, .androidVR("1.60.19"), .ios, .android, .androidVR("1.65.10")]
+
+    /// Clients whose streams recently failed during playback, and when. They are tried last.
+    private var penalized: [String: Date] = [:]
+    private let penaltyLifetime: TimeInterval = 60 * 60
+
+    /// Called when a stream stopped working mid-playback: that client goes to the back of
+    /// the line for a while and the cached links are dropped.
+    func reportFailure(_ stream: ResolvedStream) {
+        cacheLock.withLock {
+            if !stream.clientKey.isEmpty { penalized[stream.clientKey] = Date() }
+            cache[stream.details.id] = nil
+        }
+    }
+
+    private var orderedClients: [ClientProfile] {
+        cacheLock.withLock {
+            let now = Date()
+            penalized = penalized.filter { now.timeIntervalSince($0.value) < penaltyLifetime }
+            let ok = clients.filter { penalized[$0.key] == nil }
+            let bad = clients.filter { penalized[$0.key] != nil }
+                .sorted { (penalized[$0.key] ?? now) < (penalized[$1.key] ?? now) }
+            return ok + bad
+        }
+    }
 
     // Stream URLs stay valid for hours; reuse a resolution for a while so replays,
     // quality changes after a relaunch of the item and "back to this video" are instant.
@@ -100,14 +127,23 @@ final class StreamResolver: @unchecked Sendable {
 
     private func resolveFresh(videoId: String) async throws -> ResolvedStream {
         var lastReason: String?
-        for client in clients {
+        var limited: ResolvedStream?
+        for client in orderedClients {
             guard let json = try? await player(videoId: videoId, client: client) else { continue }
             guard json.at("playabilityStatus.status").string == "OK" else {
                 lastReason = json.at("playabilityStatus.reason").string ?? lastReason
                 continue
             }
-            if let stream = await build(json, client: client) { return stream }
+            guard var stream = await build(json, client: client) else { continue }
+            stream.clientKey = client.key
+            if stream.isLive || stream.hlsURL != nil { return stream }
+            if await reachesEnd(stream, userAgent: client.userAgent) { return stream }
+            // This client only gets the start of each file: keep looking, but remember it
+            // in case nothing better turns up (better a partial play than none).
+            if limited == nil { limited = stream }
+            cacheLock.withLock { penalized[client.key] = Date() }
         }
+        if let limited { return limited }
         throw InnerTubeError.unplayable(lastReason ?? "This video can't be played right now.")
     }
 
@@ -115,8 +151,10 @@ final class StreamResolver: @unchecked Sendable {
         let details = Self.details(json["videoDetails"], microformat: json.at("microformat.playerMicroformatRenderer"))
         let sd = json["streamingData"]
 
-        // Live: real HLS.
-        if let s = sd["hlsManifestUrl"].string, let url = URL(string: s) {
+        // Live: real HLS. (Some clients also send a manifest for regular videos; those play
+        // from the adaptive formats below so every quality, audio-only and the checks apply.)
+        if details.isLive || sd["adaptiveFormats"].array.isEmpty,
+           let s = sd["hlsManifestUrl"].string, let url = URL(string: s) {
             if let text = try? await fetchText(url, userAgent: client.userAgent) {
                 let m = HLSManifest(text: text, baseURL: url)
                 if !m.variants.isEmpty {
@@ -160,6 +198,21 @@ final class StreamResolver: @unchecked Sendable {
         if a.fps != b.fps { return a.fps > b.fps }
         if a.hdr != b.hdr { return a.hdr }
         return a.bitrate > b.bitrate
+    }
+
+    /// YouTube serves some clients only the first ~third of each stream and answers 403
+    /// beyond it. One tiny range request near the end of the file tells them apart.
+    /// Network trouble counts as "fine": only a definite refusal rejects a client.
+    private func reachesEnd(_ s: ResolvedStream, userAgent: String) async -> Bool {
+        guard let f = s.audio ?? s.autoFormats.last, f.contentLength > 1024 else { return true }
+        let at = f.contentLength * 9 / 10
+        var req = URLRequest(url: f.url)
+        req.setValue("bytes=\(at)-\(at + 15)", forHTTPHeaderField: "Range")
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 6
+        guard let (_, resp) = try? await tube.session.data(for: req),
+              let code = (resp as? HTTPURLResponse)?.statusCode else { return true }
+        return code != 403 && code != 401
     }
 
     // MARK: Requests

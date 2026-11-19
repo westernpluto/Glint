@@ -45,34 +45,55 @@ struct ClientProfile {
         extraContext: ["platform": "DESKTOP"]
     )
 
-    // Playback: HLS manifests with every resolution up to 4K/8K (incl. HDR).
+    // Playback. YouTube limits some client versions to the first part of each stream
+    // (playback stops about a third of the way in), so several identities are kept and
+    // the resolver checks each stream reaches its end before using it.
     static let ios = ClientProfile(
         clientName: "IOS",
-        clientVersion: "20.10.4",
+        clientVersion: "20.45.3",
         clientId: 5,
         host: "www.youtube.com",
-        userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
+        userAgent: "com.google.ios.youtube/20.45.3 (iPhone16,2; U; CPU iOS 18_7 like Mac OS X;)",
         extraContext: [
             "deviceMake": "Apple",
             "deviceModel": "iPhone16,2",
             "osName": "iPhone",
-            "osVersion": "18.3.2.22D82",
+            "osVersion": "18.7.0.22H20",
         ]
     )
 
-    // Playback fallback: direct (unciphered) adaptive MP4/M4A streams.
-    static let androidVR = ClientProfile(
-        clientName: "ANDROID_VR",
-        clientVersion: "1.65.10",
-        clientId: 28,
+    static let android = ClientProfile(
+        clientName: "ANDROID",
+        clientVersion: "20.10.38",
+        clientId: 3,
         host: "www.youtube.com",
-        userAgent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+        userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
         extraContext: [
-            "deviceMake": "Oculus",
-            "deviceModel": "Quest 3",
-            "androidSdkVersion": 32,
+            "androidSdkVersion": 30,
             "osName": "Android",
-            "osVersion": "12L",
+            "osVersion": "11",
         ]
     )
+
+    static func androidVR(_ version: String) -> ClientProfile {
+        ClientProfile(
+            clientName: "ANDROID_VR",
+            clientVersion: version,
+            clientId: 28,
+            host: "www.youtube.com",
+            userAgent: "com.google.android.apps.youtube.vr.oculus/\(version) (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+            extraContext: [
+                "deviceMake": "Oculus",
+                "deviceModel": "Quest 3",
+                "androidSdkVersion": 32,
+                "osName": "Android",
+                "osVersion": "12L",
+            ]
+        )
+    }
+
+    static let androidVR = androidVR("1.62.27")
+
+    /// Identity used for "this client failed" bookkeeping.
+    var key: String { clientName + "/" + clientVersion }
 }

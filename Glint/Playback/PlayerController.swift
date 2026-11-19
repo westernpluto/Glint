@@ -88,6 +88,10 @@ final class PlayerController {
     @ObservationIgnored private var failures = 0
     @ObservationIgnored private var resolvedAt = Date()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// Fires when playback has been stuck waiting for data for too long.
+    @ObservationIgnored private var stallTask: Task<Void, Never>?
+    /// The item recovery last ran for, so one breakdown reported twice is handled once.
+    @ObservationIgnored private weak var recoveredItem: AVPlayerItem?
     @ObservationIgnored private var activeVideoId: String?
     @ObservationIgnored private var activeIsMusic = false
     @ObservationIgnored private var lastPositionSave = Date.distantPast
@@ -110,6 +114,7 @@ final class PlayerController {
                 guard let self else { return }
                 self.isPlaying = status == .playing
                 self.isBuffering = status == .waitingToPlayAtSpecifiedRate
+                self.watchForStall(waiting: status == .waitingToPlayAtSpecifiedRate)
                 self.nowPlaying.update()
             }
         })
@@ -119,6 +124,15 @@ final class PlayerController {
             MainActor.assumeIsolated {
                 guard let self, (n.object as? AVPlayerItem) === self.player.currentItem else { return }
                 self.handleEnd()
+            }
+        }
+        // A segment that can't be fetched (e.g. YouTube refusing the rest of a stream) ends
+        // playback early instead of failing the item: recover the same way as a failure.
+        nc.addObserver(forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: nil, queue: .main) { [weak self] n in
+            let message = (n.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?.localizedDescription
+            MainActor.assumeIsolated {
+                guard let self, let item = n.object as? AVPlayerItem, item === self.player.currentItem else { return }
+                self.recover(item, message: message)
             }
         }
         nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
@@ -284,6 +298,7 @@ final class PlayerController {
         prefetchedNext = false
         refreshTask?.cancel()
         loadTask?.cancel()
+        stallTask?.cancel()
         player.replaceCurrentItem(with: nil)
         details = nil; extras = nil; stream = nil; selectedOption = nil
         segments = []; skipped = []; highlight = nil; manualSegment = nil; loadError = nil
@@ -416,26 +431,50 @@ final class PlayerController {
             let d = item.duration.seconds
             if d.isFinite, d > 0 { duration = d }
         case .failed:
-            isLoading = false
-            failures += 1
-            let t = currentTime
-            if failures == 1 {
-                // Most failures are expired or rejected stream links: fetch fresh ones and continue.
-                refresh(at: t)
-            } else if failures == 2, selectedOption != nil || !audioOnly {
-                // A chosen variant may be undecodable on this device; fall back to a compatible Auto.
-                if selectedOption != nil {
-                    selectedOption = nil
-                } else if let s = stream {
-                    // Retry Auto with AVC only.
-                    stream?.options = s.options.filter { $0.codec == "avc" }
-                }
-                flash("Switched to a compatible quality")
-                installItem(at: t)
-            } else {
-                loadError = message ?? "Playback failed."
-            }
+            recover(item, message: message)
         default: break
+        }
+    }
+
+    /// Something stopped playback early. Fetch fresh links (from another client when this one's
+    /// were refused) and continue from the same spot; after that, try a compatible quality.
+    private func recover(_ item: AVPlayerItem?, message: String?) {
+        guard current != nil, item == nil || item !== recoveredItem else { return }
+        recoveredItem = item
+        isLoading = false
+        failures += 1
+        let t = currentTime
+        switch failures {
+        case 2 where selectedOption != nil || !audioOnly:
+            // A chosen variant may be undecodable on this device; fall back to a compatible Auto.
+            if selectedOption != nil {
+                selectedOption = nil
+            } else if let s = stream {
+                stream?.options = s.options.filter { $0.codec == "avc" }   // Auto with AVC only
+            }
+            flash("Switched to a compatible quality")
+            installItem(at: t)
+        case 1...3:
+            // Most failures are expired or refused stream links: fresh ones, from another
+            // client if this one's were cut off, and carry on from the same spot.
+            if let s = stream, !s.isLive { StreamResolver.shared.reportFailure(s) }
+            refresh(at: t)
+        default:
+            loadError = message ?? "Playback failed."
+        }
+    }
+
+    private func watchForStall(waiting: Bool) {
+        stallTask?.cancel()
+        guard waiting else { return }
+        let item = player.currentItem
+        let at = currentTime
+        stallTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard let self, !Task.isCancelled, self.player.currentItem === item, item != nil,
+                  self.isBuffering, abs(self.currentTime - at) < 1,
+                  self.stream?.isLive != true, !self.isLoading else { return }
+            self.recover(item, message: "Playback stalled.")
         }
     }
 

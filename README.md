@@ -81,5 +81,7 @@ project.yml     XcodeGen spec
 ## Maintenance notes
 
 - YouTube changes its private API from time to time. The client identities are in `Glint/Core/InnerTube/ClientProfile.swift`; usually bumping a version there is the only fix needed.
-- Playback tries the `ANDROID_VR` client first because it returns direct stream URLs without proof-of-origin tokens. The `IOS` client is the fallback.
+- Playback tries several clients (`ANDROID_VR` versions, `IOS`, `ANDROID`), all of which return direct stream URLs without proof-of-origin tokens.
+  - YouTube serves some client versions only the first third of each stream. Before playing, Glint checks that the stream can be read near its end and skips clients that can't.
+  - If a stream still stops mid-play (refused, stalled or ended early), Glint moves that client to the back of the list and carries on from the same spot with fresh links.
 - Google sign-in happens in an isolated web view with a Safari user agent. If Google ever blocks embedded sign-in, sign-in is the only feature affected. Browsing, search, Music and playback all work signed out.
