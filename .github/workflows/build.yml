@@ -25,8 +25,8 @@ jobs:
           # Newest installed Xcode 27.x (the iPhone Duo APIs need the 27.1+ SDK).
           XC=""; BEST=""
           for c in /Applications/Xcode*.app; do
-            [ -x "$c/Contents/Developer/usr/bin/xcodebuild" ] || continue
-            V=$("$c/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | awk '/^Xcode /{print $2; exit}')
+            [ -f "$c/Contents/Info.plist" ] || continue
+            V=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$c/Contents/Info.plist" 2>/dev/null || true)
             case "$V" in 27*) ;; *) continue ;; esac
             if [ -z "$BEST" ] || [ "$(printf '%s\n%s\n' "$BEST" "$V" | sort -V | tail -n1)" = "$V" ]; then BEST="$V"; XC="$c"; fi
           done
@@ -126,8 +126,8 @@ jobs:
           # Newest installed Xcode 27.x (the iPhone Duo APIs need the 27.1+ SDK).
           XC=""; BEST=""
           for c in /Applications/Xcode*.app; do
-            [ -x "$c/Contents/Developer/usr/bin/xcodebuild" ] || continue
-            V=$("$c/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | awk '/^Xcode /{print $2; exit}')
+            [ -f "$c/Contents/Info.plist" ] || continue
+            V=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$c/Contents/Info.plist" 2>/dev/null || true)
             case "$V" in 27*) ;; *) continue ;; esac
             if [ -z "$BEST" ] || [ "$(printf '%s\n%s\n' "$BEST" "$V" | sort -V | tail -n1)" = "$V" ]; then BEST="$V"; XC="$c"; fi
           done
