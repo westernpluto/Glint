@@ -92,6 +92,23 @@ final class PlayerController {
     @ObservationIgnored private var failures = 0
     /// Times the loopback SABR server was restarted for this item.
     @ObservationIgnored private var sabrServerRestarts = 0
+    @ObservationIgnored private var lastSabrRestart = Date.distantPast
+    @ObservationIgnored private var pausedAt: Date?
+
+    /// Brings the loopback SABR server back (fresh listener, same port if it can) and rebuilds
+    /// the item at the current position, in case the port changed.
+    private func restartSabrServer(_ reason: String, force: Bool = false) {
+        guard stream?.sabr != nil, force || Date().timeIntervalSince(lastSabrRestart) > 8 else { return }
+        lastSabrRestart = Date()
+        note("Local SABR server: restarting (\(reason))")
+        isLoading = true
+        let t = currentTime
+        Task { @MainActor in
+            try? await SabrServer.shared.restart()
+            guard self.stream?.sabr != nil else { return }
+            self.installItem(at: t)
+        }
+    }
     @ObservationIgnored private var resolvedAt = Date()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     /// Fires when playback has been stuck waiting for data for too long.
@@ -176,6 +193,10 @@ final class PlayerController {
                     return String(parts[i + 1])
                 }
                 let kind = e.uri.map { $0.contains("/api/manifest/") ? " playlist" : $0.contains("videoplayback") ? " segment" : "" } ?? ""
+                // Can't reach the loopback SABR server: it was taken away while suspended.
+                if e.errorDomain == NSURLErrorDomain, e.errorStatusCode == NSURLErrorCannotConnectToHost {
+                    self.restartSabrServer("unreachable")
+                }
                 self.note("AVPlayer error \(e.errorStatusCode) \(e.errorDomain)\(itag.map { " itag \($0)" } ?? "")\(kind)\(e.errorComment.map { ": \($0)" } ?? "")")
             }
         }
@@ -498,6 +519,7 @@ final class PlayerController {
             note("Ready (\(audioOnly ? "audio only" : selectedOption?.label ?? "Auto"))")
             isLoading = false
             failures = 0          // recovered: the next failure gets the full recovery path again
+            sabrServerRestarts = 0
             loadError = nil
             let d = item.duration.seconds
             if d.isFinite, d > 0 { duration = d }
@@ -521,18 +543,12 @@ final class PlayerController {
                 + (current?.isMusic == true ? "song" : "video") + " right now."
             return
         }
-        if let s = stream, s.sabr != nil, sabrServerRestarts < 2,
-           let m = message?.lowercased(), m.contains("connect") || m.contains("server") {
-            // The loopback server was gone (iOS reclaims sockets of suspended apps): bring it
-            // back and carry on from the same spot.
+        if let s = stream, s.sabr != nil, sabrServerRestarts < 3,
+           let m = message?.lowercased(), m.contains("connect") || m.contains("server") || m.contains("stall") {
+            // The loopback server was gone (iOS reclaims sockets of suspended apps) or stopped
+            // answering: bring it back and carry on from the same spot.
             sabrServerRestarts += 1
-            note("Local SABR server unreachable → restarting it")
-            isLoading = true
-            let t = currentTime
-            Task { @MainActor in
-                try? await SabrServer.shared.restart()
-                self.installItem(at: t)
-            }
+            restartSabrServer("playback stopped: \(message ?? "?")", force: true)
             return
         }
         if let s = stream, s.hlsURL != nil || s.sabr != nil, !s.isLive, s.progressiveURL != nil {
@@ -600,6 +616,13 @@ final class PlayerController {
             return
         }
         if player.currentItem == nil, current != nil, stream != nil { installItem(at: currentTime); return }
+        // SABR after a pause: the app may have been suspended and lost its loopback server.
+        if stream?.sabr != nil, let p = pausedAt, Date().timeIntervalSince(p) > 20 {
+            pausedAt = nil
+            restartSabrServer("resuming after a pause", force: true)
+            return
+        }
+        pausedAt = nil
         // Finished video: play again from the start.
         if duration > 0, currentTime >= duration - 1 { seek(to: 0) }
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -607,6 +630,7 @@ final class PlayerController {
     }
 
     func pause() {
+        pausedAt = Date()
         player.pause()
         savePosition()
     }
