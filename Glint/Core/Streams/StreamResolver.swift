@@ -267,7 +267,11 @@ final class StreamResolver: @unchecked Sendable {
                 group.addTask { (false, i, await self.hlsRefusal(url, userAgent: ua)) }
             }
             for await (isVariant, i, refusal) in group {
-                if isVariant { variantOK[i] = refusal == nil } else { mediaOK[i] = refusal == nil }
+                // Only a refused playlist drops an entry. A refused segment probe is just
+                // logged: YouTube has refused Glint's probe while serving AVPlayer the same
+                // segments.
+                let ok = !(refusal?.hasPrefix("playlist") ?? false)
+                if isVariant { variantOK[i] = ok } else { mediaOK[i] = ok }
                 if let refusal { refusals[refusal, default: 0] += 1 }
             }
         }
@@ -283,7 +287,7 @@ final class StreamResolver: @unchecked Sendable {
             return liveGroups.contains(g)
         }.map { $0.element }
         let why = refusals.sorted { $0.key < $1.key }.map { "\($0.value)× \($0.key)" }.joined(separator: ", ")
-        trace?("\(client.key): HLS check (\(label)) \(out.variants.count)/\(variants.count) qualities, \(mediaOK.values.filter { $0 }.count)/\(media.count) audio tracks served\(why.isEmpty ? "" : "; refused: " + why)")
+        trace?("\(client.key): HLS check (\(label)) \(out.variants.count)/\(variants.count) qualities, \(mediaOK.values.filter { $0 }.count)/\(media.count) audio tracks kept\(why.isEmpty ? "" : "; refused: " + why)")
         return out
     }
 
@@ -329,9 +333,12 @@ final class StreamResolver: @unchecked Sendable {
                 // the manifest (403), so only those that answer are kept.
                 if !details.isLive { m = await validated(m, client: client, label: label) }
                 if !m.variants.isEmpty {
+                    // The muxed 360p file rides along: if the player is refused the HLS
+                    // segments, it switches to that instead of failing.
                     return ResolvedStream(details: details, options: hlsOptions(m), hlsURL: url, manifest: m,
                                           audio: nil, streamUserAgent: client.userAgent, isLive: details.isLive,
-                                          captions: Captions.tracks(json))
+                                          captions: Captions.tracks(json),
+                                          progressiveURL: details.isLive ? nil : Self.progressiveURL(json))
                 }
                 if details.isLive { break }
             }

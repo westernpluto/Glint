@@ -116,7 +116,7 @@ final class PlayerController {
             head.append("Now: \(c.title) [\(c.videoId)] \(c.isMusic ? "music" : "video")\(audioOnly ? ", audio only" : "")")
         }
         if let s = stream {
-            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.hlsURL != nil ? ", HLS" : "")\(s.progressiveURL != nil ? ", 360p progressive" : "")")
+            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.hlsURL != nil ? ", HLS" : "")\(s.progressiveURL != nil ? (s.hlsURL == nil ? ", 360p progressive" : ", 360p fallback ready") : "")")
         }
         head.append("Position \(formatTime(currentTime)) / \(formatTime(duration)), \(isPlaying ? "playing" : isBuffering ? "buffering" : "paused")\(loadError.map { ", error: \($0)" } ?? "")")
         return (head + [""] + diagnostics).joined(separator: "\n")
@@ -499,6 +499,18 @@ final class PlayerController {
             player.pause()
             loadError = "YouTube is only letting Glint play the first part of this "
                 + (current?.isMusic == true ? "song" : "video") + " right now."
+            return
+        }
+        if let s = stream, s.hlsURL != nil, !s.isLive, s.progressiveURL != nil {
+            // YouTube refused the HLS stream (signed-in web sessions: some videos' segments
+            // are 403): play the full-length 360p file from the same response instead.
+            note("HLS refused (\(message ?? "error")) → 360p progressive")
+            stream?.hlsURL = nil
+            stream?.manifest = nil
+            stream?.options = []
+            selectedOption = nil
+            isLoading = false
+            installItem(at: currentTime)
             return
         }
         note("Stopped: \(message ?? "unknown") → recovery step \(failures + 1)")
