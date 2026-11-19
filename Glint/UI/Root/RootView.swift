@@ -123,6 +123,10 @@ enum ScreenshotDriver {
         let d = UserDefaults.standard
         guard let scene = d.string(forKey: "GlintScene") else { return }
         try? await Task.sleep(nanoseconds: 600_000_000)
+        if d.string(forKey: "GlintOrientation") == "landscape" {
+            Orientation.request(.landscapeRight)
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
         switch scene {
         case "subscriptions": section.wrappedValue = .subscriptions
         case "music": section.wrappedValue = .music

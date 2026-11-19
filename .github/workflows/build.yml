@@ -155,7 +155,7 @@ jobs:
           set +e
           xcodebuild -project Glint.xcodeproj -scheme Glint -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath build-sim ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build > sim-build.log 2>&1
+            -derivedDataPath build-sim ARCHS=arm64 ONLY_ACTIVE_ARCH=YES TARGETED_DEVICE_FAMILY=1,2 CODE_SIGNING_ALLOWED=NO build > sim-build.log 2>&1
           STATUS=$?
           set -e
           grep -E "error:|\*\* BUILD" sim-build.log || true

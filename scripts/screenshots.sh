@@ -41,29 +41,50 @@ shot() {  # display name
     && note "shot $2" || note "screenshot failed: $2"
 }
 
-run_scene() {  # scene
+run_scene() {  # scene [orientation]
   t 20 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
-  t 60 xcrun simctl launch "$UDID" "$BUNDLE" -GlintScene "$1" -GlintQuery "4k nature" >/dev/null || note "launch failed: $1"
+  t 60 xcrun simctl launch "$UDID" "$BUNDLE" -GlintScene "$1" -GlintQuery "4k nature" \
+    -GlintOrientation "${2:-portrait}" >/dev/null || note "launch failed: $1"
   sleep 16
 }
 
-# Phase 1: the outer display ("primary") — the device starts closed.
+# The iPhone Duo outer display ("primary").
 for scene in home watch nowplaying mini; do
   run_scene "$scene"
   shot primary "outer-$scene"
 done
 
-# Phase 2: open the device — power the inner panel ("primary-1"), switch the outer one off.
-t 30 xcrun simctl io "$UDID" screenConfig --display=primary-1 power on >>"$LOG" 2>&1 || note "inner power on failed"
-t 30 xcrun simctl io "$UDID" screenConfig --display=primary power off >>"$LOG" 2>&1 || note "outer power off failed"
-sleep 20
-for scene in home watch nowplaying music search mini library; do
-  run_scene "$scene"
-  shot primary-1 "inner-$scene"
-done
-t 30 xcrun simctl ui "$UDID" appearance dark >/dev/null 2>&1 || true
-run_scene watch; shot primary-1 "inner-watch-dark"
-
 t 60 xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
 t 60 xcrun simctl delete "$UDID" >/dev/null 2>&1 || true
+ls -la "$OUT"
+
+# Inner-display stand-in: iPad mini — regular width and close to the Duo inner panel's size.
+# (simctl can't move an app to the Duo inner panel without a fold event.)
+IPAD=$(t 60 xcrun simctl list devicetypes -j | python3 -c '
+import json, sys
+ts = [t for t in json.load(sys.stdin)["devicetypes"] if "iPad mini" in t["name"]]
+print(ts[-1]["identifier"] if ts else "")')
+if [ -n "$IPAD" ]; then
+  for rt in $RUNTIMES; do
+    UDID=$(t 60 xcrun simctl create "glint-ipad" "$IPAD" "$rt" 2>>"$LOG") && { note "iPad on $rt"; break; }
+    UDID=""
+  done
+  if [ -n "$UDID" ]; then
+    t 120 xcrun simctl boot "$UDID" || true
+    t 300 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || note "iPad bootstatus timed out"
+    t 30 xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 >/dev/null 2>&1 || true
+    t 30 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
+    t 120 xcrun simctl install "$UDID" "$APP" || note "iPad install failed"
+    for scene in home watch nowplaying music; do
+      run_scene "$scene" portrait
+      t 40 xcrun simctl io "$UDID" screenshot "$OUT/inner-$scene.png" >/dev/null 2>>"$LOG" && note "shot inner-$scene"
+    done
+    for scene in home watch nowplaying; do
+      run_scene "$scene" landscape
+      t 40 xcrun simctl io "$UDID" screenshot "$OUT/inner-$scene-landscape.png" >/dev/null 2>>"$LOG" && note "shot inner-$scene-landscape"
+    done
+    t 60 xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
+    t 60 xcrun simctl delete "$UDID" >/dev/null 2>&1 || true
+  fi
+fi
 ls -la "$OUT"
