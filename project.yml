@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.9.9"
-    CURRENT_PROJECT_VERSION: "46"
+    MARKETING_VERSION: "1.10.0"
+    CURRENT_PROJECT_VERSION: "47"
     IPHONEOS_DEPLOYMENT_TARGET: "27.0"
 
 targets:
@@ -34,6 +34,9 @@ targets:
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
+        # SABR streams are served to AVPlayer from a loopback HTTP server (127.0.0.1).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:

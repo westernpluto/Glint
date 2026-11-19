@@ -20,9 +20,13 @@ struct DashFormat: Hashable {
     var isAudio: Bool
     /// File size in bytes (0 if YouTube didn't say).
     var contentLength: Int
+    /// Identify the format in SABR requests.
+    var lastModified: UInt64?
+    var xtags: String?
 
-    init?(_ f: JSON) {
-        guard let s = f["url"].string, let url = URL(string: s),
+    /// `placeholderURL`: for SABR formats, which have no link of their own.
+    init?(_ f: JSON, placeholderURL: URL? = nil) {
+        guard let url = f["url"].string.flatMap(URL.init(string:)) ?? placeholderURL,
               let mime = f["mimeType"].string,
               mime.hasPrefix("video/mp4") || mime.hasPrefix("audio/mp4"),
               let i0 = f.at("initRange.start").int, let i1 = f.at("initRange.end").int,
@@ -48,6 +52,8 @@ struct DashFormat: Hashable {
         self.contentLength = Int(f["contentLength"].string ?? "")
             ?? URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
                 .first { $0.name == "clen" }?.value.flatMap { Int($0) } ?? 0
+        self.lastModified = f["lastModified"].string.flatMap { UInt64($0) }
+        self.xtags = f["xtags"].string
         if f["isDrc"].bool == true { return nil }  // skip dynamic-range-compressed duplicates
     }
 

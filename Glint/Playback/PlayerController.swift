@@ -116,7 +116,7 @@ final class PlayerController {
             head.append("Now: \(c.title) [\(c.videoId)] \(c.isMusic ? "music" : "video")\(audioOnly ? ", audio only" : "")")
         }
         if let s = stream {
-            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.hlsURL != nil ? ", HLS" : "")\(s.progressiveURL != nil ? (s.hlsURL == nil ? ", 360p progressive" : ", 360p fallback ready") : "")")
+            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.hlsURL != nil ? ", HLS" : "")\(s.sabr != nil ? ", SABR" : "")\(s.progressiveURL != nil ? (s.hlsURL == nil && s.sabr == nil ? ", 360p progressive" : ", 360p fallback ready") : "")")
         }
         head.append("Position \(formatTime(currentTime)) / \(formatTime(duration)), \(isPlaying ? "playing" : isBuffering ? "buffering" : "paused")\(loadError.map { ", error: \($0)" } ?? "")")
         return (head + [""] + diagnostics).joined(separator: "\n")
@@ -424,7 +424,7 @@ final class PlayerController {
             } else {
                 asset = AVURLAsset(url: hls)
             }
-        } else if let url = s.progressiveURL {
+        } else if s.sabr == nil, let url = s.progressiveURL {
             // One muxed 360p file; AVPlayer streams it directly (audio-only just hides the video).
             asset = AVURLAsset(url: url, options: [AVURLAssetHTTPUserAgentKey: s.progressiveUserAgent ?? s.streamUserAgent])
         } else {
@@ -439,8 +439,19 @@ final class PlayerController {
                 }
             }
             if videos.isEmpty && s.audio == nil { loadError = "No playable stream."; return }
-            let url = HLSLoader.shared.register(video: videos, audio: s.audio, userAgent: s.streamUserAgent)
-            asset = HLSLoader.asset(for: url)
+            if let sabr = s.sabr {
+                // SABR: segments come from YouTube's own protocol through the loopback server.
+                let audioOnly = videos.isEmpty
+                Task { await sabr.setAudioOnly(audioOnly) }
+                guard let url = SabrServer.shared.url(for: sabr, videos: videos, audioOnly: audioOnly) else {
+                    loadError = "Couldn't start the local stream server."
+                    return
+                }
+                asset = AVURLAsset(url: url)
+            } else {
+                let url = HLSLoader.shared.register(video: videos, audio: s.audio, userAgent: s.streamUserAgent)
+                asset = HLSLoader.asset(for: url)
+            }
         }
 
         let item = AVPlayerItem(asset: asset)
@@ -501,11 +512,13 @@ final class PlayerController {
                 + (current?.isMusic == true ? "song" : "video") + " right now."
             return
         }
-        if let s = stream, s.hlsURL != nil, !s.isLive, s.progressiveURL != nil {
-            // YouTube refused the HLS stream (signed-in web sessions: some videos' segments
-            // are 403): play the full-length 360p file from the same response instead.
-            note("HLS refused (\(message ?? "error")) → 360p progressive")
+        if let s = stream, s.hlsURL != nil || s.sabr != nil, !s.isLive, s.progressiveURL != nil {
+            // YouTube refused the HLS / SABR stream (signed-in web sessions: some videos'
+            // segments are 403): play the full-length 360p file from the same response instead.
+            note("\(s.sabr != nil ? "SABR" : "HLS") failed (\(message ?? "error")) → 360p progressive")
             stream?.hlsURL = nil
+            stream?.sabr = nil
+            stream?.audio = nil
             stream?.manifest = nil
             stream?.options = []
             selectedOption = nil

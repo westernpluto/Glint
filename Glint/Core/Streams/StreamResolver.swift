@@ -59,6 +59,8 @@ struct ResolvedStream {
     var progressiveURL: URL?
     /// User agent for `progressiveURL` when it came from another client's response.
     var progressiveUserAgent: String?
+    /// Set when the formats are fetched over SABR (their `url`s are placeholders).
+    var sabr: SabrSession?
 
     /// Video formats suitable for "Auto" (one per resolution, decodable).
     var autoFormats: [DashFormat] {
@@ -137,7 +139,7 @@ final class StreamResolver: @unchecked Sendable {
     func resolve(videoId: String) async throws -> ResolvedStream {
         if let hit = cached(videoId) { return hit }
         let stream = try await resolveFresh(videoId: videoId)
-        if !stream.isLive { store(stream, for: videoId) }
+        if !stream.isLive, stream.sabr == nil { store(stream, for: videoId) }
         return stream
     }
 
@@ -195,6 +197,13 @@ final class StreamResolver: @unchecked Sendable {
                 continue
             }
             stream.clientKey = client.key
+            if stream.sabr != nil {
+                if let p = progressive, let url = p.progressiveURL {
+                    stream.progressiveURL = url
+                    stream.progressiveUserAgent = p.streamUserAgent
+                }
+                return stream
+            }
             if stream.hlsURL != nil {
                 trace?("\(client.key): \(stream.isLive ? "live " : "")HLS, \(stream.options.count) qualities")
                 // Fall back to a 360p file that another client already got (MWEB's has played
@@ -256,6 +265,55 @@ final class StreamResolver: @unchecked Sendable {
                 : "YouTube is asking to confirm you're not a bot. Sign in to YouTube in Settings, then try again.")
         }
         throw InnerTubeError.unplayable(lastReason ?? "This video can't be played right now.")
+    }
+
+    /// A SABR-backed stream: the same adaptive formats, fetched through `SabrSession` and served
+    /// to AVPlayer as HLS by `SabrServer`. The first request (audio from the start) must answer.
+    private func sabrStream(_ json: JSON, details: VideoDetails, client: ClientProfile) async -> ResolvedStream? {
+        let sd = json["streamingData"]
+        guard let s = sd[Self.sabrURLKey].string, let url = URL(string: s),
+              let configText = json.at("playerConfig.mediaCommonConfig.mediaUstreamerRequestConfig.videoPlaybackUstreamerConfig").string,
+              let ustreamer = Self.base64URLData(configText) else { return nil }
+        let formats = sd["adaptiveFormats"].array.compactMap { DashFormat($0, placeholderURL: url) }
+        guard let audio = formats.filter({ $0.isAudio && $0.codecs.hasPrefix("mp4a") }).max(by: { $0.bitrate < $1.bitrate })
+        else { return nil }
+        let videos = formats.filter { !$0.isAudio && codecSupported($0.codecs) }
+        var best: [String: StreamOption] = [:]
+        for v in videos {
+            let o = StreamOption(height: v.height, width: v.width, fps: v.fps, codec: v.codecFamily,
+                                 hdr: v.hdrRange != nil, bitrate: v.bitrate, source: .dash(v))
+            let key = "\(o.lines)-\(o.fps)-\(o.hdr)"
+            if let cur = best[key], prefer(cur, over: o) { continue }
+            best[key] = o
+        }
+        let options = best.values.sorted(by: Self.order)
+        let config = SabrConfig(videoId: details.id, url: url, ustreamerConfig: ustreamer,
+                                clientNameId: client.clientId, clientVersion: client.clientVersion,
+                                poToken: sd[Self.sabrTokenKey].string.flatMap(Self.base64URLData),
+                                userAgent: client.userAgent)
+        let session = SabrSession(config: config, audio: audio,
+                                  videos: options.compactMap { if case .dash(let f) = $0.source { return f }; return nil },
+                                  session: tube.session)
+        do {
+            try await SabrServer.shared.start()
+            try await session.prepare()
+        } catch {
+            trace?("\(client.key): SABR failed (\(error.localizedDescription))")
+            return nil
+        }
+        trace?("\(client.key): SABR ok, \(options.count) qualities, audio itag \(audio.itag)")
+        var stream = ResolvedStream(details: details, options: options, hlsURL: nil, manifest: nil,
+                                    audio: audio, streamUserAgent: client.userAgent, isLive: false,
+                                    captions: Captions.tracks(json))
+        stream.sabr = session
+        stream.progressiveURL = Self.progressiveURL(json)   // fallback if SABR breaks mid-play
+        return stream
+    }
+
+    private static func base64URLData(_ s: String) -> Data? {
+        var t = (s.removingPercentEncoding ?? s).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while t.count % 4 != 0 { t += "=" }
+        return Data(base64Encoded: t)
     }
 
     /// Fetches each variant's and audio track's playlist and the first bytes of its first
@@ -327,7 +385,12 @@ final class StreamResolver: @unchecked Sendable {
         let details = Self.details(json["videoDetails"], microformat: json.at("microformat.playerMicroformatRenderer"))
         let sd = json["streamingData"]
 
-        let formats = sd["adaptiveFormats"].array.compactMap(DashFormat.init)
+        let formats = sd["adaptiveFormats"].array.compactMap { DashFormat($0) }
+
+        // No direct links: YouTube's own protocol (SABR) gets every quality with separate audio.
+        if formats.isEmpty, !details.isLive, let stream = await sabrStream(json, details: details, client: client) {
+            return stream
+        }
 
         // HLS: live streams, and regular videos when YouTube sent no direct adaptive links
         // (signed-in web sessions often get only its streaming protocol plus an HLS manifest).
@@ -503,9 +566,11 @@ final class StreamResolver: @unchecked Sendable {
         let pending = keys.flatMap { json.at("streamingData.\($0)").array.compactMap(PendingLink.init) }
         let hls = json.at("streamingData.hlsManifestUrl").string
         let hlsN = hls.flatMap(Self.manifestN)
+        let sabr = json.at("streamingData.serverAbrStreamingUrl").string
+        let sabrN = sabr.flatMap { URLComponents(string: $0)?.queryItems?.first { $0.name == "n" }?.value }
         let adaptiveLinks = json.at("streamingData.adaptiveFormats").array.compactMap(PendingLink.init).count
         trace?("\(client.key): \(adaptiveLinks) adaptive links, \(pending.count - adaptiveLinks) muxed, HLS \(hls == nil ? "no" : "yes")")
-        guard !pending.isEmpty || hls != nil else {
+        guard !pending.isEmpty || hls != nil || sabr != nil else {
             trace?("\(client.key): YouTube sent no direct links (streaming-protocol-only session)")
             return json
         }
@@ -513,7 +578,7 @@ final class StreamResolver: @unchecked Sendable {
         let solutions: JSChallengeSolver.Solutions
         do {
             solutions = try await JSChallengeSolver.shared.solve(
-                n: pending.compactMap(\.n) + [hlsN].compactMap { $0 }, sig: pending.compactMap(\.s), player: player)
+                n: pending.compactMap(\.n) + [hlsN, sabrN].compactMap { $0 }, sig: pending.compactMap(\.s), player: player)
         } catch {
             trace?("\(client.key): challenges not solved (\(error.localizedDescription))")
             return json
@@ -569,11 +634,18 @@ final class StreamResolver: @unchecked Sendable {
                 }
             }
         }
+        if let sabr, sabrN.map({ solutions.n[$0] != nil }) ?? true {
+            // SABR (YouTube's own protocol): the link with n solved, and the token it sends.
+            sd[Self.sabrURLKey] = .string(sabrN.flatMap { n in solutions.n[n].map { Self.settingQuery(sabr, "n", $0) } } ?? sabr)
+            if let pot { sd[Self.sabrTokenKey] = .string(pot) }
+        }
         root["streamingData"] = .object(sd)
         return .object(root)
     }
 
     private static let videoBoundManifestKey = "glintVideoBoundHlsManifestUrl"
+    private static let sabrURLKey = "glintSabrUrl"
+    private static let sabrTokenKey = "glintSabrPoToken"
 
     /// The n challenge in an HLS manifest URL's path (`…/n/<challenge>/…`).
     private static func manifestN(_ url: String) -> String? {
