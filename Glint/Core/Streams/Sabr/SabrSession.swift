@@ -104,6 +104,7 @@ actor SabrSession {
 
     /// Drop cached media (keeps init segments and indexes): this session isn't playing.
     func trim() {
+        idle = true
         inFlight?.cancel()
         cache = [:]
         cacheOrder = []
@@ -128,6 +129,7 @@ actor SabrSession {
 
     /// Media segment `number` (1-based, as SABR counts) of a format.
     func segment(_ itag: Int, number: Int) async throws -> Data {
+        idle = false
         let key = Key(itag: itag, number: number)
         guard let f = format(itag) else { throw SabrFailure.noMedia }
         if !f.isAudio { select(f) }
@@ -146,6 +148,7 @@ actor SabrSession {
     // MARK: Requests
 
     private func select(_ video: DashFormat) {
+        idle = false
         audioOnly = false
         currentVideo = video
     }
@@ -167,10 +170,20 @@ actor SabrSession {
         key.number == 0 ? inits[key.itag] != nil : cache[key] != nil
     }
 
-    /// The running request will reach `ms` soon (same video format; from the audio segment containing its start to ~30 s after).
+    /// Not the playing session (trimmed): no fetching ahead until playback asks again.
+    private var idle = false
+    /// Whether the last answer carried any media (an empty one doesn't get an automatic follow-up).
+    private var lastAnswerHadMedia = true
+
+    /// How far past its start position the server says it sends per answer
+    /// (NextRequestPolicy target readahead; ~15 s audio / ~25 s video seen).
+    private var readaheadMs: Double = 15_000
+
+    /// The running request will deliver `ms` (same video format; from the audio segment
+    /// containing its start to the readahead the server announced).
     private func inFlightCovers(_ ms: Double) -> Bool {
         let video = audioOnly ? nil : currentVideo?.itag
-        return inFlightVideo == video && ms >= inFlightStartMs - 11_000 && ms <= inFlightStartMs + 30_000
+        return inFlightVideo == video && ms >= inFlightStartMs - 11_000 && ms < inFlightStartMs + readaheadMs
     }
 
     private func startRequest(atMs: Double) {
@@ -203,6 +216,8 @@ actor SabrSession {
         let all = waiters
         waiters = []
         for w in all { w.continuation.resume() }
+        // Back to back: keep filling ahead without waiting for AVPlayer's next ask.
+        if lastError == nil, all.isEmpty, lastAnswerHadMedia { continueAhead() }
     }
 
     private func waitFor(_ key: Key) async {
@@ -212,18 +227,30 @@ actor SabrSession {
         }
     }
 
-    /// Keep ~30 s ahead of what AVPlayer last took.
-    private func prefetch(after number: Int, itag: Int) {
-        guard inFlight == nil, let idx = indexes[itag], number < idx.count else { return }
-        var ahead = 0.0
-        for n in (number + 1)...idx.count {
-            if cache[Key(itag: itag, number: n)] == nil {
-                startRequest(atMs: idx[n - 1].start + min(50, idx[n - 1].duration / 4))
-                return
+    /// After AVPlayer took a segment.
+    private func prefetch(after number: Int, itag: Int) { continueAhead() }
+
+    /// Keep ~45 s cached ahead of the furthest point AVPlayer has asked for, in every playing
+    /// track (but never more than half the cache), starting the next request at the first gap.
+    private func continueAhead() {
+        guard inFlight == nil, !idle else { return }
+        let tracks = [audio.itag] + (audioOnly ? [] : [currentVideo?.itag].compactMap { $0 })
+        var gaps: [Double] = []
+        for itag in tracks {
+            guard let idx = indexes[itag],
+                  var i = idx.firstIndex(where: { lastPositionMs < $0.start + $0.duration }) else { continue }
+            var ahead = 0.0, bytes = 0
+            while i < idx.count, ahead < 45_000, bytes < cacheLimit / 2 {
+                guard let d = cache[Key(itag: itag, number: i + 1)] else {
+                    gaps.append(idx[i].start + min(50, idx[i].duration / 4))
+                    break
+                }
+                ahead += idx[i].duration
+                bytes += d.count
+                i += 1
             }
-            ahead += idx[n - 1].duration
-            if ahead > 30_000 { return }
         }
+        if let at = gaps.min() { startRequest(atMs: at) }
     }
 
     private func request(atMs playerTimeMs: Double) async throws {
@@ -326,7 +353,10 @@ actor SabrSession {
                     mediaCount += 1
                     store(seg.itag, isInit: seg.isInit, number: seg.number, data: seg.data)
                 case 35:   // NEXT_REQUEST_POLICY
-                    if let c = ProtoMessage(part.payload).data(7) { cookie = c }
+                    let policy = ProtoMessage(part.payload)
+                    if let c = policy.data(7) { cookie = c }
+                    let target = audioOnly ? policy.int(1) : policy.int(2)
+                    if let target, target > 2_000 { readaheadMs = Double(target) }
                 case 43:   // SABR_REDIRECT
                     if let s = ProtoMessage(part.payload).string(1), let u = URL(string: s) {
                         url = u
@@ -344,6 +374,7 @@ actor SabrSession {
                 }
             }
         }
+        if !redirected { lastAnswerHadMedia = mediaCount > 0 }
         if let firstByte { SabrBandwidth.record(bytes: received, seconds: Date().timeIntervalSince(firstByte)) }
         return redirected && mediaCount == 0
     }
