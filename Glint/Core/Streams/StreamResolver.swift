@@ -50,6 +50,9 @@ struct ResolvedStream {
     var captions: [CaptionTrack] = []
     /// Which client produced these links (see `StreamResolver.reportFailure`).
     var clientKey: String = ""
+    /// YouTube refused the end of the file for every available client: only the first
+    /// part will play.
+    var isPartial = false
 
     /// Video formats suitable for "Auto" (one per resolution, decodable).
     var autoFormats: [DashFormat] {
@@ -156,7 +159,10 @@ final class StreamResolver: @unchecked Sendable {
             if limited == nil { limited = stream }
             cacheLock.withLock { penalized[client.key] = Date() }
         }
-        if let limited { return limited }
+        if var limited {
+            limited.isPartial = true
+            return limited
+        }
         throw InnerTubeError.unplayable(lastReason ?? "This video can't be played right now.")
     }
 

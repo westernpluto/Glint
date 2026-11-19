@@ -480,6 +480,15 @@ final class PlayerController {
     private func recover(_ item: AVPlayerItem?, message: String?) {
         guard current != nil, item == nil || item !== recoveredItem else { return }
         recoveredItem = item
+        if stream?.isPartial == true {
+            // Every client was already limited to the start of this file; retrying can't help.
+            note("Stopped at YouTube's limit for this stream (\(message ?? "refused"))")
+            isLoading = false
+            player.pause()
+            loadError = "YouTube is only letting Glint play the first part of this "
+                + (current?.isMusic == true ? "song" : "video") + " right now."
+            return
+        }
         note("Stopped: \(message ?? "unknown") → recovery step \(failures + 1)")
         isLoading = false
         failures += 1
