@@ -94,6 +94,8 @@ final class PlayerController {
     @ObservationIgnored private var sabrServerRestarts = 0
     @ObservationIgnored private var lastSabrRestart = Date.distantPast
     @ObservationIgnored private var pausedAt: Date?
+    /// The single variant SABR Auto is playing (nil when a quality was chosen or not SABR).
+    @ObservationIgnored private var sabrAutoPick: DashFormat?
 
     /// Brings the loopback SABR server back (fresh listener, same port if it can) and rebuilds
     /// the item at the current position, in case the port changed.
@@ -470,10 +472,12 @@ final class PlayerController {
                 // SABR: segments come from YouTube's own protocol through the loopback server.
                 // Auto offers one quality: AVPlayer measures the loopback server (cached segments
                 // arrive instantly), so left to itself it climbs past what the connection carries.
+                sabrAutoPick = nil
                 if selectedOption == nil, videos.count > 1,
                    let pick = SabrBandwidth.autoVideo(videos, audioBitrate: s.audio?.bitrate ?? 0,
                                                       defaultQuality: settings.defaultQuality) {
                     videos = [pick]
+                    sabrAutoPick = pick
                 }
                 let audioOnly = videos.isEmpty
                 Task { await sabr.setAudioOnly(audioOnly) }
@@ -598,13 +602,41 @@ final class PlayerController {
         guard waiting else { return }
         let item = player.currentItem
         let at = currentTime
+        // SABR in Auto steps down sooner: the stall is most likely the connection.
+        let sabrAuto = stream?.sabr != nil && selectedOption == nil && !audioOnly && sabrAutoPick != nil
         stallTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(15))
+            try? await Task.sleep(for: .seconds(sabrAuto ? 8 : 15))
+            if sabrAuto {
+                guard let self, !Task.isCancelled, self.player.currentItem === item, item != nil,
+                      self.isBuffering, abs(self.currentTime - at) < 1, !self.isLoading else { return }
+                await self.sabrStalled(item)
+                return
+            }
             guard let self, !Task.isCancelled, self.player.currentItem === item, item != nil,
                   self.isBuffering, abs(self.currentTime - at) < 1,
                   self.stream?.isLive != true, !self.isLoading else { return }
             self.recover(item, message: "Playback stalled.")
         }
+    }
+
+    /// SABR, Auto, buffering for a while: if the loopback server answers, the connection can't
+    /// keep up, so lower the speed estimate and step down a quality at the same spot.
+    private func sabrStalled(_ item: AVPlayerItem?) async {
+        guard await SabrServer.shared.isAlive() else {
+            restartSabrServer("stalled, local server gone", force: true)
+            return
+        }
+        guard let s = stream, let pick = sabrAutoPick else { return recover(item, message: "Playback stalled.") }
+        let videos = s.options.compactMap { if case .dash(let f) = $0.source { return f }; return nil }
+            .filter { settings.preferHDR || $0.hdrRange == nil }
+        let lower = videos.filter { $0.bitrate < pick.bitrate }
+        guard !lower.isEmpty else { return recover(item, message: "Playback stalled.") }
+        SabrBandwidth.limit(toBelow: pick.bitrate + (s.audio?.bitrate ?? 0))
+        let next = SabrBandwidth.autoVideo(videos, audioBitrate: s.audio?.bitrate ?? 0, defaultQuality: 0) ?? lower[0]
+        let label: (DashFormat) -> String = { "\($0.width > 0 ? min($0.width, $0.height) : $0.height)p" }
+        note("Stalling at \(label(pick)) → Auto steps down to \(label(next))")
+        flash("Lowered quality to keep playing")
+        installItem(at: currentTime)
     }
 
     // MARK: Controls

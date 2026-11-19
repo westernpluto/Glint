@@ -9,7 +9,11 @@ struct GlintApp: App {
 
     init() {
         URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 512 << 20)
-        Task { await InnerTube.shared.warmUp() }
+        Task {
+            await InnerTube.shared.warmUp()
+            try? await Task.sleep(for: .seconds(2))   // let the first screen load first
+            await StreamResolver.shared.prewarm()
+        }
     }
 
     var body: some Scene {

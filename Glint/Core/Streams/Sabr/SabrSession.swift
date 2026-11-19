@@ -483,6 +483,17 @@ enum SabrBandwidth {
 
     static var bitsPerSecond: Double? { lock.withLock { estimate } }
 
+    /// After a stall: the connection didn't carry `bitsPerSecond` (video + audio), so the
+    /// estimate drops just under what Auto would need for it.
+    static func limit(toBelow bitsPerSecond: Int) {
+        let v: Double = lock.withLock {
+            let next = min(estimate ?? .infinity, Double(bitsPerSecond) * 1.4)
+            estimate = next
+            return next
+        }
+        UserDefaults.standard.set(v, forKey: key)
+    }
+
     /// The best of `videos` (best first) for Auto: the user's default quality when set; else
     /// what the measured speed carries with headroom (video + audio × 1.5), up to 4K; 1080p
     /// before anything has been measured.

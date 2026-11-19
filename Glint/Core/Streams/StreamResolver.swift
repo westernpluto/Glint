@@ -137,6 +137,16 @@ final class StreamResolver: @unchecked Sendable {
     }
 
     /// What playback is about to do, so a SABR session's first request can fetch exactly that.
+    /// At launch: player script, solver and PO token minter ready before the first video.
+    func prewarm() async {
+        if tube.visitorData == nil { await tube.warmUp() }
+        async let solver: Void = JSChallengeSolver.shared.prewarm(session: tube.session)
+        if let vd = tube.visitorData {
+            _ = try? await PoTokenProvider.shared.token(for: PoTokenProvider.contentBinding(visitorData: vd), visitorData: vd)
+        }
+        await solver
+    }
+
     struct Hints: Sendable {
         var startAt: Double = 0
         var audioOnly = false

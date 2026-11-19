@@ -92,6 +92,18 @@ final class JSChallengeSolver: @unchecked Sendable {
         return Player(id: id, sts: sts, code: code)
     }
 
+    private static func preprocessedFile(_ id: String) -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("player-js", isDirectory: true)
+            .appendingPathComponent("\(id).preprocessed.js")
+    }
+
+    /// Loads the player script and does the first (slow) solve ahead of time.
+    func prewarm(session: URLSession) async {
+        guard let p = try? await player(session: session) else { return }
+        _ = try? await solve(n: ["glintPrewarm0123"], sig: [], player: p)
+    }
+
     private static func text(_ url: URL, session: URLSession) async throws -> String {
         var req = URLRequest(url: url)
         req.setValue(ClientProfile.web.userAgent, forHTTPHeaderField: "User-Agent")
@@ -127,6 +139,10 @@ final class JSChallengeSolver: @unchecked Sendable {
         if !sig.isEmpty { requests.append(["type": "sig", "challenges": sig]) }
 
         var input: [String: Any] = ["requests": requests]
+        if preprocessed[player.id] == nil, let saved = try? String(contentsOf: Self.preprocessedFile(player.id), encoding: .utf8),
+           saved.count > 100_000 {
+            preprocessed = [player.id: saved]
+        }
         if let pre = preprocessed[player.id] {
             input["type"] = "preprocessed"
             input["preprocessed_player"] = pre
@@ -149,6 +165,9 @@ final class JSChallengeSolver: @unchecked Sendable {
         if obj["type"] as? String == "error" { throw SolverError.script(obj["error"] as? String ?? "error") }
         if let pre = obj["preprocessed_player"] as? String {
             preprocessed = [player.id: pre]   // one player at a time
+            // Saved next to the player script (cleared with it when YouTube ships a new one):
+            // later launches skip the slow first parse.
+            try? pre.write(to: Self.preprocessedFile(player.id), atomically: true, encoding: .utf8)
         }
 
         var result = Solutions()
