@@ -13,6 +13,9 @@ final class SabrServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.glint.sabr-server")
     private var listener: NWListener?
     private var port: UInt16?
+    /// The port handed out in URLs. iOS takes listening sockets away from suspended apps, so
+    /// the server comes back on this same port and AVPlayer's existing URLs keep working.
+    private var preferredPort: UInt16?
     private var starting: [CheckedContinuation<Void, Error>] = []
     private var sessions: [String: SabrSession] = [:]
     private var order: [String] = []
@@ -25,18 +28,49 @@ final class SabrServer: @unchecked Sendable {
                 if self.port != nil, self.listener != nil { c.resume(); return }
                 self.starting.append(c)
                 guard self.listener == nil else { return }
-                do {
-                    let params = NWParameters.tcp
-                    params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-                    params.allowLocalEndpointReuse = true
-                    let l = try NWListener(using: params)
-                    l.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
-                    l.stateUpdateHandler = { [weak self] state in self?.listenerState(state) }
-                    self.listener = l
-                    l.start(queue: self.queue)
-                } catch {
-                    self.finishStarting(error)
-                }
+                self.makeListener(on: self.preferredPort)
+            }
+        }
+    }
+
+    /// A fresh listener on the same port. iOS can take a suspended app's listening socket
+    /// without the listener ever reporting it, so this replaces it rather than trusting it.
+    func restart() async throws {
+        queue.sync {
+            let old = listener
+            listener = nil
+            port = nil
+            old?.cancel()
+        }
+        try await start()
+    }
+
+    /// Called when the app returns to the foreground.
+    func ensureRunning() {
+        let hasSessions = queue.sync { !sessions.isEmpty }
+        guard hasSessions else { return }
+        Task { try? await restart() }
+    }
+
+    private func makeListener(on wanted: UInt16?) {
+        do {
+            let params = NWParameters.tcp
+            let port = wanted.flatMap { NWEndpoint.Port(rawValue: $0) } ?? .any
+            params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
+            params.allowLocalEndpointReuse = true
+            let l = try NWListener(using: params)
+            l.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
+            l.stateUpdateHandler = { [weak self, weak l] state in
+                guard let self, let l, l === self.listener else { return }
+                self.listenerState(state)
+            }
+            listener = l
+            l.start(queue: queue)
+        } catch {
+            if wanted != nil {
+                makeListener(on: nil)   // that port is taken: any port (new URLs from now on)
+            } else {
+                finishStarting(error)
             }
         }
     }
@@ -45,12 +79,24 @@ final class SabrServer: @unchecked Sendable {
         switch state {
         case .ready:
             port = listener?.port?.rawValue
+            preferredPort = port
             finishStarting(nil)
         case .failed(let error):
             listener?.cancel()
             listener = nil
             port = nil
-            finishStarting(error)
+            if starting.isEmpty {
+                // Reclaimed while running (app suspended): come back on the same port.
+                queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self, self.listener == nil, !self.sessions.isEmpty else { return }
+                    self.makeListener(on: self.preferredPort)
+                }
+            } else if preferredPort != nil {
+                preferredPort = nil
+                makeListener(on: nil)
+            } else {
+                finishStarting(error)
+            }
         case .cancelled:
             listener = nil
             port = nil

@@ -90,6 +90,8 @@ final class PlayerController {
     @ObservationIgnored private var nowPlaying: NowPlaying!
     @ObservationIgnored private var lastNowPlayingUpdate = Date.distantPast
     @ObservationIgnored private var failures = 0
+    /// Times the loopback SABR server was restarted for this item.
+    @ObservationIgnored private var sabrServerRestarts = 0
     @ObservationIgnored private var resolvedAt = Date()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     /// Fires when playback has been stuck waiting for data for too long.
@@ -345,7 +347,7 @@ final class PlayerController {
         details = nil; extras = nil; stream = nil; selectedOption = nil
         segments = []; skipped = []; highlight = nil; manualSegment = nil; loadError = nil
         captionTask?.cancel(); selectedCaption = nil; captionCues = []
-        currentTime = 0; duration = 0; playingResolution = nil; failures = 0
+        currentTime = 0; duration = 0; playingResolution = nil; failures = 0; sabrServerRestarts = 0
         player.isMuted = false; mutedBySponsor = false
         isLoading = true
         if presentation == .hidden { presentation = item.isMusic ? .mini : .expanded }
@@ -510,6 +512,20 @@ final class PlayerController {
             player.pause()
             loadError = "YouTube is only letting Glint play the first part of this "
                 + (current?.isMusic == true ? "song" : "video") + " right now."
+            return
+        }
+        if let s = stream, s.sabr != nil, sabrServerRestarts < 2,
+           let m = message?.lowercased(), m.contains("connect") || m.contains("server") {
+            // The loopback server was gone (iOS reclaims sockets of suspended apps): bring it
+            // back and carry on from the same spot.
+            sabrServerRestarts += 1
+            note("Local SABR server unreachable → restarting it")
+            isLoading = true
+            let t = currentTime
+            Task { @MainActor in
+                try? await SabrServer.shared.restart()
+                self.installItem(at: t)
+            }
             return
         }
         if let s = stream, s.hlsURL != nil || s.sabr != nil, !s.isLive, s.progressiveURL != nil {
@@ -876,5 +892,6 @@ final class PlayerController {
 
     private func enteringForeground() {
         for l in layers.allObjects { l.player = player }
+        SabrServer.shared.ensureRunning()
     }
 }
