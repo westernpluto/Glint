@@ -426,7 +426,7 @@ final class PlayerController {
             }
         } else if let url = s.progressiveURL {
             // One muxed 360p file; AVPlayer streams it directly (audio-only just hides the video).
-            asset = AVURLAsset(url: url, options: [AVURLAssetHTTPUserAgentKey: s.streamUserAgent])
+            asset = AVURLAsset(url: url, options: [AVURLAssetHTTPUserAgentKey: s.progressiveUserAgent ?? s.streamUserAgent])
         } else {
             var videos: [DashFormat] = []
             if !audioOnly {

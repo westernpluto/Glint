@@ -57,6 +57,8 @@ struct ResolvedStream {
     /// every adaptive stream was cut short: YouTube doesn't require a proof-of-origin token
     /// for this format (per yt-dlp), so it plays to the end where the others stop.
     var progressiveURL: URL?
+    /// User agent for `progressiveURL` when it came from another client's response.
+    var progressiveUserAgent: String?
 
     /// Video formats suitable for "Auto" (one per resolution, decodable).
     var autoFormats: [DashFormat] {
@@ -193,7 +195,16 @@ final class StreamResolver: @unchecked Sendable {
                 continue
             }
             stream.clientKey = client.key
-            if stream.hlsURL != nil { trace?("\(client.key): \(stream.isLive ? "live " : "")HLS, \(stream.options.count) qualities"); return stream }
+            if stream.hlsURL != nil {
+                trace?("\(client.key): \(stream.isLive ? "live " : "")HLS, \(stream.options.count) qualities")
+                // Fall back to a 360p file that another client already got (MWEB's has played
+                // where the HLS client's own one couldn't be opened).
+                if !stream.isLive, let p = progressive, let url = p.progressiveURL {
+                    stream.progressiveURL = url
+                    stream.progressiveUserAgent = p.streamUserAgent
+                }
+                return stream
+            }
             if stream.progressiveURL != nil, stream.audio == nil {
                 // Full length but 360p: keep it in case nothing better turns up (the Safari
                 // WEB client may still get HD over HLS).
