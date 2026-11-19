@@ -81,7 +81,9 @@ project.yml     XcodeGen spec
 ## Maintenance notes
 
 - YouTube changes its private API from time to time. The client identities are in `Glint/Core/InnerTube/ClientProfile.swift`; usually bumping a version there is the only fix needed.
-- Playback tries several clients (`ANDROID_VR` versions, `IOS`, `ANDROID`), all of which return direct stream URLs without proof-of-origin tokens.
-  - YouTube serves some client versions only the first third of each stream. Before playing, Glint checks that the stream can be read near its end and skips clients that can't.
+- Playback follows yt-dlp's client choices (`Glint/Core/Streams/StreamResolver.swift`): `VISIONOS` first (needs no proof-of-origin token), then `MWEB` with a PO token, then the app clients (`ANDROID_VR`, `IOS`, `ANDROID`).
+  - PO tokens are minted on the device like yt-dlp's add-on providers (bgutil / BgUtils) do: YouTube's BotGuard runs in a hidden web view (`PoTokenProvider.swift`), its result is traded for an integrity token, and the minter turns the visitor id into a token that is added to each stream link as `pot=`.
+  - Web clients' links also need the signature and `n` challenges in YouTube's player script solved. Glint runs yt-dlp's own solver ([EJS](https://github.com/yt-dlp/ejs), Unlicense; bundles meriyah (ISC) and astring (MIT)) in JavaScriptCore (`JSChallengeSolver.swift`, scripts in `Glint/Resources/JS`). To update it, copy `yt.solver.core.js` from yt-dlp and `yt.solver.lib.min.js` from the matching EJS release.
+  - YouTube serves clients without a valid token only the first part of each stream. Before playing, Glint checks that the stream can be read near its end and skips clients that can't. If every client is cut short, it plays the full-length 360p file (itag 18) instead.
   - If a stream still stops mid-play (refused, stalled or ended early), Glint moves that client to the back of the list and carries on from the same spot with fresh links.
 - Google sign-in happens in an isolated web view with a Safari user agent. If Google ever blocks embedded sign-in, sign-in is the only feature affected. Browsing, search, Music and playback all work signed out.

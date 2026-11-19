@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.8.12"
-    CURRENT_PROJECT_VERSION: "36"
+    MARKETING_VERSION: "1.9.0"
+    CURRENT_PROJECT_VERSION: "37"
     IPHONEOS_DEPLOYMENT_TARGET: "27.0"
 
 targets:
@@ -19,6 +19,12 @@ targets:
     platform: iOS
     sources:
       - path: Glint
+        excludes:
+          - "Resources/JS"
+          - "Resources/JS/**"
+      # yt-dlp's challenge solver scripts (EJS), loaded into JavaScriptCore at runtime.
+      - path: Glint/Resources/JS
+        buildPhase: resources
     info:
       path: Glint/Info.plist
       properties:

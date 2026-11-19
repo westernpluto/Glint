@@ -74,11 +74,13 @@ final class StreamResolver: @unchecked Sendable {
     /// Returns true when the device can decode a codec string such as `av01.0.12M.08`.
     var codecSupported: (String) -> Bool = { _ in true }
 
-    /// Clients tried in order; all return direct URLs (no JS deciphering). Following yt-dlp,
-    /// visionOS goes first: it needs no proof-of-origin token. The rest do, and YouTube may
-    /// cut their streams short, which `reachability` catches. (ANDROID_VR 1.65.10 is gone:
-    /// every format it gets has been refused since August 2026.)
-    var clients: [ClientProfile] = [.visionOS, .androidVR, .androidVR("1.60.19"), .ios, .android]
+    /// Clients tried in order. Following yt-dlp, visionOS goes first: it needs no
+    /// proof-of-origin token. MWEB comes next with a PO token minted on the device and its
+    /// links deciphered with the player script. The app clients after it would need tokens
+    /// only their real apps can make, so YouTube may cut their streams short; `reachability`
+    /// catches that. (ANDROID_VR 1.65.10 is gone: every format it gets has been refused
+    /// since August 2026.)
+    var clients: [ClientProfile] = [.visionOS, .mweb, .androidVR, .androidVR("1.60.19"), .ios, .android]
 
     /// Clients whose streams recently failed during playback, and when. They are tried last.
     private var penalized: [String: Date] = [:]
@@ -142,8 +144,16 @@ final class StreamResolver: @unchecked Sendable {
         var limited: ResolvedStream?
         var progressive: ResolvedStream?
         for client in orderedClients {
-            let json: JSON
-            do { json = try await player(videoId: videoId, client: client) } catch {
+            var webPlayer: JSChallengeSolver.Player?
+            if client.isWebPlayback {
+                if tube.visitorData == nil { await tube.warmUp() }
+                do { webPlayer = try await JSChallengeSolver.shared.player(session: tube.session) } catch {
+                    trace?("\(client.key): player script unavailable (\(error.localizedDescription))")
+                    continue
+                }
+            }
+            var json: JSON
+            do { json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts) } catch {
                 trace?("\(client.key): request failed (\(error.localizedDescription))")
                 continue
             }
@@ -152,6 +162,7 @@ final class StreamResolver: @unchecked Sendable {
                 trace?("\(client.key): \(json.at("playabilityStatus.status").string ?? "?") \(json.at("playabilityStatus.reason").string ?? "")")
                 continue
             }
+            if let webPlayer { json = await prepareWebFormats(json, client: client, player: webPlayer) }
             guard var stream = await build(json, client: client) else {
                 trace?("\(client.key): no usable formats")
                 continue
@@ -165,6 +176,7 @@ final class StreamResolver: @unchecked Sendable {
             // in case nothing better turns up (better a partial play than none).
             if limited == nil { limited = stream }
             cacheLock.withLock { penalized[client.key] = Date() }
+            if client.isWebPlayback { await PoTokenProvider.shared.reset() }   // mint a fresh one next time
             if progressive == nil, let url = Self.progressiveURL(json) {
                 let p = await reachability(url, length: nil, userAgent: client.userAgent)
                 trace?("\(client.key): 360p progressive check \(p.description)")
@@ -294,13 +306,111 @@ final class StreamResolver: @unchecked Sendable {
 
     // MARK: Requests
 
-    private func player(videoId: String, client: ClientProfile) async throws -> JSON {
-        try await tube.call("player", client: client, body: [
+    private func player(videoId: String, client: ClientProfile, sts: Int? = nil) async throws -> JSON {
+        var playback: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
+        if let sts { playback["signatureTimestamp"] = sts }
+        return try await tube.call("player", client: client, body: [
             "videoId": videoId,
             "contentCheckOk": true,
             "racyCheckOk": true,
-            "playbackContext": ["contentPlaybackContext": ["html5Preference": "HTML5_PREF_WANTS"]],
+            "playbackContext": ["contentPlaybackContext": playback],
         ], authenticated: false)
+    }
+
+    // MARK: Web clients
+
+    /// One format's link before its challenges are solved.
+    private struct PendingLink {
+        var url: String
+        var s: String?          // encrypted signature (from signatureCipher)
+        var sp = "signature"    // query name the solved signature goes under
+        var n: String?
+
+        init?(_ f: JSON) {
+            if let u = f["url"].string {
+                url = u
+            } else if let cipher = f["signatureCipher"].string {
+                var fields: [String: String] = [:]
+                for pair in cipher.split(separator: "&") {
+                    let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                    guard kv.count == 2 else { continue }
+                    fields[kv[0]] = kv[1].replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? kv[1]
+                }
+                guard let u = fields["url"], let sig = fields["s"] else { return nil }
+                url = u
+                s = sig
+                if let p = fields["sp"], !p.isEmpty { sp = p }
+            } else {
+                return nil
+            }
+            n = URLComponents(string: url)?.queryItems?.first { $0.name == "n" }?.value
+        }
+    }
+
+    /// Web clients' links: solve the signature and n challenges with the player script and add
+    /// a PO token bound to this visitor (as yt-dlp does), so the formats below are directly
+    /// playable. Formats whose challenges couldn't be solved lose their link.
+    private func prepareWebFormats(_ json: JSON, client: ClientProfile, player: JSChallengeSolver.Player) async -> JSON {
+        let keys = ["adaptiveFormats", "formats"]
+        let pending = keys.flatMap { json.at("streamingData.\($0)").array.compactMap(PendingLink.init) }
+        guard !pending.isEmpty else { return json }
+
+        let solutions: JSChallengeSolver.Solutions
+        do {
+            solutions = try await JSChallengeSolver.shared.solve(
+                n: pending.compactMap(\.n), sig: pending.compactMap(\.s), player: player)
+        } catch {
+            trace?("\(client.key): challenges not solved (\(error.localizedDescription))")
+            return json
+        }
+
+        var pot: String?
+        if let visitorData = tube.visitorData {
+            let binding = PoTokenProvider.contentBinding(visitorData: visitorData)
+            do {
+                pot = try await PoTokenProvider.shared.token(for: binding, visitorData: visitorData)
+            } catch {
+                trace?("\(client.key): PO token failed (\(error.localizedDescription))")
+            }
+        }
+        trace?("\(client.key): player \(player.id), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(pot == nil ? "none" : "ok")")
+
+        func rewrite(_ f: JSON) -> JSON {
+            guard case .object(var o) = f, let link = PendingLink(f) else { return f }
+            o["signatureCipher"] = nil
+            o["url"] = nil
+            var url = link.url
+            if let n = link.n {
+                guard let solved = solutions.n[n] else { return .object(o) }
+                url = Self.settingQuery(url, "n", solved)
+            }
+            if let s = link.s {
+                guard let solved = solutions.sig[s] else { return .object(o) }
+                url = Self.settingQuery(url, link.sp, solved)
+            }
+            if let pot { url = Self.settingQuery(url, "pot", pot) }
+            o["url"] = .string(url)
+            return .object(o)
+        }
+
+        guard case .object(var root) = json, case .object(var sd) = json["streamingData"] else { return json }
+        for key in keys {
+            if case .array(let formats) = sd[key] { sd[key] = .array(formats.map(rewrite)) }
+        }
+        root["streamingData"] = .object(sd)
+        return .object(root)
+    }
+
+    private static let queryValueAllowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+
+    /// Sets one query item, leaving the rest of the (already encoded) link exactly as it was.
+    private static func settingQuery(_ url: String, _ name: String, _ value: String) -> String {
+        guard var c = URLComponents(string: url) else { return url }
+        var items = c.percentEncodedQueryItems ?? []
+        items.removeAll { $0.name == name }
+        items.append(URLQueryItem(name: name, value: value.addingPercentEncoding(withAllowedCharacters: queryValueAllowed)))
+        c.percentEncodedQueryItems = items
+        return c.string ?? url
     }
 
     private func fetchText(_ url: URL, userAgent: String) async throws -> String {

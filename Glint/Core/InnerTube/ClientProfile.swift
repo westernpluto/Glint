@@ -10,6 +10,9 @@ struct ClientProfile {
     var host: String
     var userAgent: String
     var extraContext: [String: Any] = [:]
+    /// Web-family client: stream links need the player script's challenges solved
+    /// (`JSChallengeSolver`) and a PO token (`PoTokenProvider`) to play to the end.
+    var isWebPlayback = false
     var origin: String { "https://" + host }
 
     func context(visitorData: String?, hl: String, gl: String) -> [String: Any] {
@@ -64,6 +67,18 @@ struct ClientProfile {
             "osName": "visionOS",
             "osVersion": "26.5.23O471",
         ]
+    )
+
+    /// Mobile web, with yt-dlp's iPad user agent. Needs a PO token for its streams (minted by
+    /// `PoTokenProvider`) and the player script's signature / n challenges solved; in return
+    /// it works for nearly everything, "made for kids" videos included.
+    static let mweb = ClientProfile(
+        clientName: "MWEB",
+        clientVersion: "2.20260708.05.00",
+        clientId: 2,
+        host: "www.youtube.com",
+        userAgent: "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)",
+        isWebPlayback: true
     )
 
     static let ios = ClientProfile(
