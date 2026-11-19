@@ -119,6 +119,7 @@ struct SearchView: View {
                     }
                     .padding(.horizontal, Metrics.gutter(screen))
                 }
+                .keepsToOwnFrame()
                 .padding(.vertical, 6)
             }
             .scrollDismissesKeyboard(.immediately)

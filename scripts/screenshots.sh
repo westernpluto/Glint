@@ -10,6 +10,24 @@ LOG="$OUT/log.txt"
 t() { local secs="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$secs" "$@"; }
 note() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
+shot() {  # display name — one retry, since a busy simulator sometimes misses the first
+  for attempt in 1 2; do
+    t 40 xcrun simctl io "$UDID" screenshot --display="$1" "$OUT/$2.png" >/dev/null 2>>"$LOG" \
+      && { note "shot $2"; return; }
+    sleep 5
+  done
+  note "screenshot failed: $2"
+}
+
+install_app() {  # one retry: a freshly booted simulator can still be settling
+  for attempt in 1 2; do
+    t 180 xcrun simctl install "$UDID" "$APP" && return 0
+    note "install attempt $attempt failed"
+    sleep 20
+  done
+  return 1
+}
+
 t 60 xcrun simctl list devicetypes > "$OUT/devicetypes.txt" 2>&1 || true
 t 60 xcrun simctl list runtimes > "$OUT/runtimes.txt" 2>&1 || true
 
@@ -34,12 +52,8 @@ t 300 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || note "bootstatus tim
 t 90 xcrun simctl io "$UDID" enumerate > "$OUT/enumerate.txt" 2>&1 || true
 t 30 xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3 >/dev/null 2>&1 || true
 t 30 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
-t 120 xcrun simctl install "$UDID" "$APP" || { note "install failed"; exit 0; }
+install_app || { note "install failed"; exit 0; }
 
-shot() {  # display name
-  t 40 xcrun simctl io "$UDID" screenshot --display="$1" "$OUT/$2.png" >/dev/null 2>>"$LOG" \
-    && note "shot $2" || note "screenshot failed: $2"
-}
 
 run_scene() {  # scene [orientation]
   t 20 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
@@ -70,14 +84,23 @@ done
 if true; then
   if [ -n "$UDID" ]; then
     t 120 xcrun simctl boot "$UDID" || true
-    t 300 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || note "iPad bootstatus timed out"
+    t 480 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || note "iPad bootstatus timed out"
     t 30 xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 >/dev/null 2>&1 || true
     t 30 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
-    t 120 xcrun simctl install "$UDID" "$APP" || note "iPad install failed"
-    for scene in home watch nowplaying music; do
-      run_scene "$scene" portrait
-      t 40 xcrun simctl io "$UDID" screenshot "$OUT/inner-$scene.png" >/dev/null 2>>"$LOG" && note "shot inner-$scene"
-    done
+    if install_app; then
+      for scene in home watch nowplaying music; do
+        run_scene "$scene" portrait
+        # The iPad has one display; no --display needed.
+        for attempt in 1 2; do
+          t 40 xcrun simctl io "$UDID" screenshot "$OUT/inner-$scene.png" >/dev/null 2>>"$LOG" \
+            && { note "shot inner-$scene"; break; }
+          sleep 5
+        done
+      done
+    else
+      # Without the app, captures would only show the simulator's home screen.
+      note "iPad install failed; skipping inner-display captures"
+    fi
     t 60 xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
     t 60 xcrun simctl delete "$UDID" >/dev/null 2>&1 || true
   fi

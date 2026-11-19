@@ -89,6 +89,7 @@ struct SkeletonShelf: View {
                 }
                 .padding(.horizontal, Metrics.gutter(screen))
             }
+            .keepsToOwnFrame()
             .scrollDisabled(true)
         }
         .shimmering()

@@ -28,6 +28,7 @@ struct HomeChips: View {
             .padding(.horizontal, Metrics.gutter(screen))
             .padding(.vertical, 4)
         }
+        .keepsToOwnFrame()
     }
 }
 
@@ -163,6 +164,7 @@ struct ShelfRow: View {
                         }
                         .scrollTargetLayout()
                     }
+                    .keepsToOwnFrame()
                     .contentMargins(.horizontal, Metrics.gutter(screen), for: .scrollContent)
                     .scrollTargetBehavior(.viewAligned)
                 }

@@ -128,6 +128,7 @@ struct ShelfStack: View {
                             .scrollTargetLayout()
                             .padding(.horizontal, Metrics.gutter(screen))
                         }
+                        .keepsToOwnFrame()
                         .scrollTargetBehavior(.viewAligned)
                     }
                 }
