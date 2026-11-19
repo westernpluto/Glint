@@ -53,6 +53,10 @@ struct ResolvedStream {
     /// YouTube refused the end of the file for every available client: only the first
     /// part will play.
     var isPartial = false
+    /// A single progressive MP4 (itag 18: 360p, video + audio) played directly. Used when
+    /// every adaptive stream was cut short: YouTube doesn't require a proof-of-origin token
+    /// for this format (per yt-dlp), so it plays to the end where the others stop.
+    var progressiveURL: URL?
 
     /// Video formats suitable for "Auto" (one per resolution, decodable).
     var autoFormats: [DashFormat] {
@@ -70,9 +74,11 @@ final class StreamResolver: @unchecked Sendable {
     /// Returns true when the device can decode a codec string such as `av01.0.12M.08`.
     var codecSupported: (String) -> Bool = { _ in true }
 
-    /// Clients tried in order; all return direct URLs without proof-of-origin tokens.
-    /// Some versions only get the first part of each stream, which `reachesEnd` catches.
-    var clients: [ClientProfile] = [.androidVR, .androidVR("1.60.19"), .ios, .android, .androidVR("1.65.10")]
+    /// Clients tried in order; all return direct URLs (no JS deciphering). Following yt-dlp,
+    /// visionOS goes first: it needs no proof-of-origin token. The rest do, and YouTube may
+    /// cut their streams short, which `reachability` catches. (ANDROID_VR 1.65.10 is gone:
+    /// every format it gets has been refused since August 2026.)
+    var clients: [ClientProfile] = [.visionOS, .androidVR, .androidVR("1.60.19"), .ios, .android]
 
     /// Clients whose streams recently failed during playback, and when. They are tried last.
     private var penalized: [String: Date] = [:]
@@ -134,6 +140,7 @@ final class StreamResolver: @unchecked Sendable {
     private func resolveFresh(videoId: String) async throws -> ResolvedStream {
         var lastReason: String?
         var limited: ResolvedStream?
+        var progressive: ResolvedStream?
         for client in orderedClients {
             let json: JSON
             do { json = try await player(videoId: videoId, client: client) } catch {
@@ -158,7 +165,20 @@ final class StreamResolver: @unchecked Sendable {
             // in case nothing better turns up (better a partial play than none).
             if limited == nil { limited = stream }
             cacheLock.withLock { penalized[client.key] = Date() }
+            if progressive == nil, let url = Self.progressiveURL(json) {
+                let p = await reachability(url, length: nil, userAgent: client.userAgent)
+                trace?("\(client.key): 360p progressive check \(p.description)")
+                if p.ok {
+                    var s = stream
+                    s.options = []
+                    s.audio = nil
+                    s.progressiveURL = url
+                    progressive = s
+                }
+            }
         }
+        // Full length at 360p beats the first part in HD.
+        if let progressive { trace?("Using 360p progressive from \(progressive.clientKey)"); return progressive }
         if var limited {
             limited.isPartial = true
             return limited
@@ -232,23 +252,44 @@ final class StreamResolver: @unchecked Sendable {
         }
     }
 
-    /// YouTube serves some clients only the first ~third of each stream (or nothing) and
-    /// answers 403 beyond that. Two tiny range requests, at the start and near the end of
-    /// the file, tell them apart.
+    /// YouTube serves clients without a proof-of-origin token only the first part of each
+    /// stream (or nothing) and answers 403 beyond that. Two tiny range requests, at the start
+    /// and near the end of the file, tell them apart.
     private func reachability(_ s: ResolvedStream, userAgent: String) async -> Reachability {
-        guard let f = s.audio ?? s.autoFormats.last, f.contentLength > 1024 else { return Reachability() }
-        async let start = status(f.url, at: 0, userAgent: userAgent)
-        async let end = status(f.url, at: f.contentLength * 9 / 10, userAgent: userAgent)
-        return await Reachability(start: start, end: end)
+        guard let f = s.audio ?? s.autoFormats.last else { return Reachability() }
+        return await reachability(f.url, length: f.contentLength, userAgent: userAgent)
     }
 
-    private func status(_ url: URL, at offset: Int, userAgent: String) async -> Int? {
+    /// `length` nil or 0: learned from the first response's Content-Range.
+    private func reachability(_ url: URL, length: Int?, userAgent: String) async -> Reachability {
+        if let length, length > 1024 {
+            async let start = status(url, at: 0, userAgent: userAgent)
+            async let end = status(url, at: length * 9 / 10, userAgent: userAgent)
+            return await Reachability(start: start.code, end: end.code)
+        }
+        let start = await status(url, at: 0, userAgent: userAgent)
+        guard let total = start.total, total > 1024 else { return Reachability(start: start.code) }
+        return Reachability(start: start.code, end: await status(url, at: total * 9 / 10, userAgent: userAgent).code)
+    }
+
+    private func status(_ url: URL, at offset: Int, userAgent: String) async -> (code: Int?, total: Int?) {
         var req = URLRequest(url: url)
         req.setValue("bytes=\(offset)-\(offset + 15)", forHTTPHeaderField: "Range")
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 6
-        guard let (_, resp) = try? await tube.session.data(for: req) else { return nil }
-        return (resp as? HTTPURLResponse)?.statusCode
+        guard let (_, resp) = try? await tube.session.data(for: req),
+              let http = resp as? HTTPURLResponse else { return (nil, nil) }
+        // "bytes 0-15/12345"
+        let total = (http.value(forHTTPHeaderField: "Content-Range")?.split(separator: "/").last)
+            .flatMap { Int($0) }
+        return (http.statusCode, total)
+    }
+
+    /// The muxed 360p MP4 (itag 18), when this client got a direct link for it.
+    private static func progressiveURL(_ json: JSON) -> URL? {
+        json.at("streamingData.formats").array
+            .first { $0["itag"].int == 18 }?["url"].string
+            .flatMap(URL.init(string:))
     }
 
     // MARK: Requests

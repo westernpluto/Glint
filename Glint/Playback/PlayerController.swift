@@ -116,7 +116,7 @@ final class PlayerController {
             head.append("Now: \(c.title) [\(c.videoId)] \(c.isMusic ? "music" : "video")\(audioOnly ? ", audio only" : "")")
         }
         if let s = stream {
-            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")")
+            head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.progressiveURL != nil ? ", 360p progressive" : "")")
         }
         head.append("Position \(formatTime(currentTime)) / \(formatTime(duration)), \(isPlaying ? "playing" : isBuffering ? "buffering" : "paused")\(loadError.map { ", error: \($0)" } ?? "")")
         return (head + [""] + diagnostics).joined(separator: "\n")
@@ -415,6 +415,9 @@ final class PlayerController {
             } else {
                 asset = AVURLAsset(url: hls)
             }
+        } else if let url = s.progressiveURL {
+            // One muxed 360p file; AVPlayer streams it directly (audio-only just hides the video).
+            asset = AVURLAsset(url: url, options: [AVURLAssetHTTPUserAgentKey: s.streamUserAgent])
         } else {
             var videos: [DashFormat] = []
             if !audioOnly {

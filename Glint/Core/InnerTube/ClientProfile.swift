@@ -45,9 +45,27 @@ struct ClientProfile {
         extraContext: ["platform": "DESKTOP"]
     )
 
-    // Playback. YouTube limits some client versions to the first part of each stream
-    // (playback stops about a third of the way in), so several identities are kept and
-    // the resolver checks each stream reaches its end before using it.
+    // Playback. YouTube limits clients that need a proof-of-origin token to the first part
+    // of each stream (playback stops partway in), so several identities are kept and the
+    // resolver checks each stream reaches its end before using it.
+
+    /// Apple Vision Pro. yt-dlp's only default client that needs neither the JS player
+    /// (signature / n deciphering) nor a proof-of-origin token, so its streams play to the end.
+    /// "Made for kids" videos aren't available with it; the others below cover those.
+    static let visionOS = ClientProfile(
+        clientName: "VISIONOS",
+        clientVersion: "1.02",
+        clientId: 101,
+        host: "www.youtube.com",
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        extraContext: [
+            "deviceMake": "Apple",
+            "deviceModel": "RealityDevice17,1",
+            "osName": "visionOS",
+            "osVersion": "26.5.23O471",
+        ]
+    )
+
     static let ios = ClientProfile(
         clientName: "IOS",
         clientVersion: "20.45.3",
