@@ -443,6 +443,13 @@ final class PlayerController {
             if videos.isEmpty && s.audio == nil { loadError = "No playable stream."; return }
             if let sabr = s.sabr {
                 // SABR: segments come from YouTube's own protocol through the loopback server.
+                // Auto offers one quality: AVPlayer measures the loopback server (cached segments
+                // arrive instantly), so left to itself it climbs past what the connection carries.
+                if selectedOption == nil, videos.count > 1 {
+                    let cap = settings.defaultQuality > 0 ? settings.defaultQuality : 1080
+                    let lines: (DashFormat) -> Int = { $0.width > 0 ? min($0.width, $0.height) : $0.height }
+                    videos = [videos.first { lines($0) <= cap } ?? videos[videos.count - 1]]
+                }
                 let audioOnly = videos.isEmpty
                 Task { await sabr.setAudioOnly(audioOnly) }
                 guard let url = SabrServer.shared.url(for: sabr, videos: videos, audioOnly: audioOnly) else {

@@ -292,8 +292,7 @@ final class StreamResolver: @unchecked Sendable {
                                 poToken: sd[Self.sabrTokenKey].string.flatMap(Self.base64URLData),
                                 userAgent: client.userAgent)
         let session = SabrSession(config: config, audio: audio,
-                                  videos: options.compactMap { if case .dash(let f) = $0.source { return f }; return nil },
-                                  session: tube.session)
+                                  videos: options.compactMap { if case .dash(let f) = $0.source { return f }; return nil })
         do {
             try await SabrServer.shared.start()
             try await session.prepare()

@@ -148,3 +148,43 @@ enum UMP {
         return out
     }
 }
+
+/// UMP parsed as it arrives: feed chunks, get back every part that is complete so far.
+struct UMPStreamParser {
+    private var buffer: [UInt8] = []
+    private var start = 0
+
+    mutating func feed(_ chunk: Data) -> [UMP.Part] {
+        buffer.append(contentsOf: chunk)
+        var out: [UMP.Part] = []
+        while true {
+            var i = start
+            guard let type = readVarint(&i), let size = readVarint(&i), i + size <= buffer.count else { break }
+            out.append(UMP.Part(type: type, payload: Data(buffer[i..<i + size])))
+            start = i + size
+        }
+        if start > 1 << 20 || start == buffer.count {
+            buffer.removeFirst(start)
+            start = 0
+        }
+        return out
+    }
+
+    private func readVarint(_ i: inout Int) -> Int? {
+        guard i < buffer.count else { return nil }
+        let b = buffer
+        let first = b[i]
+        let n = first < 128 ? 1 : first < 192 ? 2 : first < 224 ? 3 : first < 240 ? 4 : 5
+        guard i + n <= b.count else { return nil }
+        let v: Int
+        switch n {
+        case 1: v = Int(first)
+        case 2: v = Int(first & 0x3F) | Int(b[i + 1]) << 6
+        case 3: v = Int(first & 0x1F) | Int(b[i + 1]) << 5 | Int(b[i + 2]) << 13
+        case 4: v = Int(first & 0x0F) | Int(b[i + 1]) << 4 | Int(b[i + 2]) << 12 | Int(b[i + 3]) << 20
+        default: v = Int(b[i + 1]) | Int(b[i + 2]) << 8 | Int(b[i + 3]) << 16 | Int(b[i + 4]) << 24
+        }
+        i += n
+        return v
+    }
+}
