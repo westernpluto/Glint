@@ -83,11 +83,17 @@ jobs:
           cp -R "$APP" Payload/
           zip -qry Glint.ipa Payload
           ls -lh Glint.ipa
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist")
+          BUNDLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist")
+          echo "Built $BUNDLE version $VERSION ($BUILD)"
+          echo "GLINT_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "GLINT_BUILD=$BUILD" >> "$GITHUB_ENV"
 
       - name: Upload .ipa
         uses: actions/upload-artifact@v4
         with:
-          name: Glint-ipa
+          name: Glint-${{ env.GLINT_VERSION }}-build${{ env.GLINT_BUILD }}-ipa
           path: Glint.ipa
           if-no-files-found: error
 

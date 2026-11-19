@@ -8,7 +8,7 @@ final class HLSLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Senda
     static let shared = HLSLoader()
     static let scheme = "glint-hls"
 
-    let queue = DispatchQueue(label: "app.glint.hls-loader")
+    let queue = DispatchQueue(label: "com.glint.hls-loader")
 
     private struct Session {
         var video: [DashFormat]

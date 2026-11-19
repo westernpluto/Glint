@@ -25,15 +25,23 @@ The app builds only on GitHub Actions. The workflow is `.github/workflows/build.
 1. Selects Xcode 27.
 2. Installs [XcodeGen](https://github.com/yonaskolb/XcodeGen) and generates `Glint.xcodeproj` from `project.yml`. The project file is generated, not committed.
 3. Builds an unsigned Release build for devices.
-4. Packages it as **`Glint.ipa`** and uploads it as the `Glint-ipa` artifact. The build log is uploaded too.
+4. Packages it as **`Glint.ipa`** and uploads it as the `Glint-<version>-build<build>-ipa` artifact. The build log is uploaded too.
 
 The workflow runs on every push and pull request. You can also start it by hand from the Actions tab (`workflow_dispatch`).
 
 ### Installing
 
-The `.ipa` is unsigned. Sign and install it with your own tool, for example AltStore, SideStore, Sideloadly or `codesign` with your Apple developer certificate. The bundle ID is `app.glint.Glint`; change `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` if you need your own.
+The `.ipa` is unsigned. Sign and install it with your own tool, for example AltStore, SideStore, Sideloadly or `codesign` with your Apple developer certificate. The bundle ID is `com.glint.Glint`; change `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` if you need your own.
 
 Requirements: iOS 18 or later.
+
+### Versioning
+
+`MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml` are the single source of truth. Every change bumps them:
+- the marketing version (`1.0.1` → `1.0.2`, or a minor/major bump for bigger releases);
+- the build number by 1.
+
+The CI artifact name includes both, so you can always tell builds apart.
 - AV1 streams (1440p and above on most videos) are offered only on devices with hardware AV1 decoding (A17 Pro and newer).
 - On other devices, Glint offers the highest-quality H.264 stream instead.
 

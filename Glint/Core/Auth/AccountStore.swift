@@ -99,7 +99,7 @@ final class AccountStore {
 }
 
 enum Keychain {
-    private static let service = "app.glint.accounts"
+    private static let service = "com.glint.accounts"
     private static let key = "accounts.v1"
 
     static func load() -> [Account] {
