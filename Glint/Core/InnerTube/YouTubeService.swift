@@ -158,6 +158,16 @@ final class YouTubeService: @unchecked Sendable {
         return Parser.feed(json, hideShorts: hideShorts)
     }
 
+    /// Channels you subscribe to (signed in).
+    func subscribedChannels() async throws -> [ChannelItem] {
+        guard tube.isSignedIn else { throw InnerTubeError.notSignedIn }
+        let json = try await tube.call("browse", body: ["browseId": "FEchannels"])
+        return Parser.feed(json, hideShorts: false).items.compactMap { item -> ChannelItem? in
+            if case .channel(let c) = item { return c }
+            return nil
+        }
+    }
+
     func history() async throws -> FeedPage {
         guard tube.isSignedIn else { throw InnerTubeError.notSignedIn }
         let json = try await tube.call("browse", body: ["browseId": "FEhistory"])

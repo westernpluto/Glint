@@ -39,6 +39,8 @@ struct SubscriptionsView: View {
                            emptyTitle: "No new videos",
                            emptyIcon: "play.square.stack") {
                     try await YouTubeService.shared.subscriptions()
+                } header: {
+                    SubscribedChannelsRow()
                 }
             } else {
                 SignInPrompt(message: "Sign in to see the latest videos from channels you subscribe to.")
@@ -102,5 +104,44 @@ struct PlaylistView: View {
         var list = videos
         if shuffle { list.shuffle() }
         player.playList(list)
+    }
+}
+
+/// Avatars of the channels you follow, one tap from their pages.
+struct SubscribedChannelsRow: View {
+    @Environment(AccountStore.self) private var accounts
+    @Environment(\.screenClass) private var screen
+    @State private var channels: [ChannelItem] = []
+    @State private var loadedGeneration: Int?
+
+    var body: some View {
+        Group {
+            if !channels.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(channels) { c in
+                            NavigationLink(value: Route.channel(id: c.id, name: c.name)) {
+                                VStack(spacing: 6) {
+                                    Avatar(url: c.thumbnail, size: 58)
+                                    Text(c.name)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .frame(width: 70)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, Metrics.gutter(screen))
+                }
+                .padding(.vertical, 8)
+            }
+        }
+        .task(id: accounts.generation) {
+            guard loadedGeneration != accounts.generation else { return }
+            channels = (try? await YouTubeService.shared.subscribedChannels()) ?? []
+            loadedGeneration = accounts.generation
+        }
     }
 }
