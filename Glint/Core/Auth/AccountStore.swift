@@ -34,6 +34,16 @@ final class AccountStore {
             activeID = accounts.first?.id
         }
         apply()
+        InnerTube.shared.onAuthCookiesChanged = { auth in
+            Task { @MainActor in AccountStore.shared.sessionRotated(auth) }
+        }
+    }
+
+    /// Persists rotated cookies for the active account without reloading anything.
+    private func sessionRotated(_ auth: AuthContext) {
+        guard let i = accounts.firstIndex(where: { $0.id == activeID }) else { return }
+        accounts[i].cookies = auth.cookies
+        persist()
     }
 
     /// Adds (or refreshes) an account from freshly captured sign-in cookies.

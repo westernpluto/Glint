@@ -131,7 +131,7 @@ final class YouTubeService: @unchecked Sendable {
         }
         return ChannelPage(id: id,
                            name: meta["title"].string ?? header.first("title")?.text ?? "",
-                           avatar: Parser.thumbnail(meta["avatar"]),
+                           avatar: Parser.avatar(meta["avatar"]),
                            banner: banner,
                            subscribers: subs,
                            feed: feed)
@@ -151,8 +151,8 @@ final class YouTubeService: @unchecked Sendable {
                 json.findAll("subscriptionStateEntity").first?["subscribed"].bool
             }
         let likes = results.first("likeButtonViewModel")?.first("title")?.string
-        let avatar = Parser.thumbnail(owner["thumbnail"])
-            ?? owner.first("avatarViewModel").flatMap { Parser.thumbnail($0["image"]) }
+        let avatar = Parser.avatar(owner["thumbnail"])
+            ?? owner.first("avatarViewModel").flatMap { Parser.avatar($0["image"]) }
         let subs = owner["subscriberCountText"].text
             ?? owner.findAll("content").compactMap { $0.string }.first { $0.contains("subscriber") }
         return WatchExtras(
@@ -200,7 +200,7 @@ final class YouTubeService: @unchecked Sendable {
         guard let h = json.first("activeAccountHeaderRenderer") else { throw InnerTubeError.notSignedIn }
         return AccountInfo(name: h["accountName"].text ?? "YouTube account",
                            handle: h["channelHandle"].text ?? h["email"].text,
-                           avatar: Parser.thumbnail(h["accountPhoto"]))
+                           avatar: Parser.avatar(h["accountPhoto"]))
     }
 
     // MARK: Music

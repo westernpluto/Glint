@@ -111,12 +111,11 @@ struct NowPlayingView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(spacing: 6) {
-                    Scrubber(current: player.currentTime, duration: player.duration,
-                             segments: player.segments, tint: .primary) { player.seek(to: $0) }
+                    LiveScrubber(tint: .primary)
                     HStack {
-                        Text(formatTime(player.currentTime))
+                        ElapsedLabel(style: .elapsed)
                         Spacer()
-                        Text("-" + formatTime(max(player.duration - player.currentTime, 0)))
+                        ElapsedLabel(style: .remaining)
                     }
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -279,12 +278,8 @@ struct MiniPlayerBar: View {
             .padding(.vertical, 8)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(alignment: .bottom) {
-                GeometryReader { g in
-                    Capsule().fill(.tint)
-                        .frame(width: player.duration > 0 ? g.size.width * min(player.currentTime / player.duration, 1) : 0, height: 2)
-                }
-                .frame(height: 2)
-                .padding(.horizontal, 16)
+                ProgressLine()
+                    .padding(.horizontal, 16)
             }
             .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
             .contentShape(Rectangle())

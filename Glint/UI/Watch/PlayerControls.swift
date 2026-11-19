@@ -267,14 +267,12 @@ struct PlayerOverlay: View {
                 Spacer()
 
                 VStack(spacing: 4) {
-                    Scrubber(current: player.currentTime, duration: player.duration, segments: player.segments) {
-                        player.seek(to: $0); scheduleHide()
-                    }
+                    LiveScrubber(tint: .white) { scheduleHide() }
                     HStack {
                         if player.stream?.isLive == true {
                             Label("LIVE", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(.red)
                         } else {
-                            Text("\(formatTime(player.currentTime)) / \(formatTime(player.duration))")
+                            ElapsedLabel(style: .elapsedOfTotal)
                         }
                         Spacer()
                         if let r = player.playingResolution, !player.audioOnly {
@@ -303,5 +301,49 @@ struct PlayerOverlay: View {
             guard !Task.isCancelled, player.isPlaying else { return }
             visible = false
         }
+    }
+}
+
+// MARK: Time-driven leaf views
+// The player publishes its time 4× a second. Only these small views read it, so the
+// rest of the controls / pages are not re-rendered on every tick.
+
+struct LiveScrubber: View {
+    var tint: Color
+    var onSeek: () -> Void = {}
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        Scrubber(current: player.currentTime, duration: player.duration, segments: player.segments, tint: tint) {
+            player.seek(to: $0)
+            onSeek()
+        }
+    }
+}
+
+struct ElapsedLabel: View {
+    enum Style { case elapsedOfTotal, elapsed, remaining }
+    var style: Style
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        switch style {
+        case .elapsedOfTotal: Text("\(formatTime(player.currentTime)) / \(formatTime(player.duration))")
+        case .elapsed: Text(formatTime(player.currentTime))
+        case .remaining: Text("-" + formatTime(max(player.duration - player.currentTime, 0)))
+        }
+    }
+}
+
+struct ProgressLine: View {
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        GeometryReader { g in
+            Capsule().fill(.tint)
+                .frame(width: player.duration > 0 ? g.size.width * min(max(player.currentTime / player.duration, 0), 1) : 0,
+                       height: 2)
+        }
+        .frame(height: 2)
     }
 }

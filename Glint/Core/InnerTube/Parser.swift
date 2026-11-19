@@ -85,8 +85,8 @@ enum Parser {
             title: r["title"].text ?? r["headline"].text ?? "",
             channelName: owner.text,
             channelId: ownerRun.at("navigationEndpoint.browseEndpoint.browseId").string,
-            channelAvatar: thumbnail(r.at("channelThumbnailSupportedRenderers.channelThumbnailWithLinkRenderer.thumbnail"))
-                ?? thumbnail(r["channelThumbnail"]),
+            channelAvatar: avatar(r.at("channelThumbnailSupportedRenderers.channelThumbnailWithLinkRenderer.thumbnail"))
+                ?? avatar(r["channelThumbnail"]),
             thumbnail: thumbnail(r["thumbnail"]),
             duration: live ? nil : duration,
             views: r["shortViewCountText"].text ?? r["viewCountText"].text ?? r["videoInfo"].text,
@@ -138,7 +138,7 @@ enum Parser {
         let channelId = meta.findAll("browseEndpoint")
             .compactMap { $0["browseId"].string }
             .first { $0.hasPrefix("UC") }
-        let avatar = meta.first("avatarViewModel").flatMap { thumbnail($0["image"]) }
+        let avatar = meta.first("avatarViewModel").flatMap { Parser.avatar($0["image"]) }
         let live = badge?.uppercased().contains("LIVE") == true
         let secondRow = rowTexts.count > 1 ? rowTexts[1] : []
         return .video(VideoItem(
@@ -159,7 +159,7 @@ enum Parser {
         guard let id = r["channelId"].string else { return nil }
         return ChannelItem(id: id,
                            name: r["title"].text ?? "",
-                           thumbnail: thumbnail(r["thumbnail"]),
+                           thumbnail: avatar(r["thumbnail"]),
                            detail: r["videoCountText"].text ?? r["subscriberCountText"].text)
     }
 
@@ -173,15 +173,26 @@ enum Parser {
 
     // MARK: Thumbnails
 
-    /// Picks the largest image from `{thumbnails:[...]}` or `{sources:[...]}`.
-    static func thumbnail(_ j: JSON) -> URL? {
+    /// Picks an image from `{thumbnails:[...]}` or `{sources:[...]}`: the smallest one at least
+    /// `minWidth` wide (sharp on cards without downloading 1280 px originals), else the largest.
+    static func thumbnail(_ j: JSON, minWidth: Int = 640) -> URL? {
         var list = j["thumbnails"].array
         if list.isEmpty { list = j["sources"].array }
         if list.isEmpty, j["url"].string != nil { list = [j] }
-        let best = list.max { ($0["width"].int ?? 0) < ($1["width"].int ?? 0) } ?? list.last
+        let sized = list.filter { ($0["width"].int ?? 0) >= minWidth }
+        let best = sized.min { ($0["width"].int ?? 0) < ($1["width"].int ?? 0) }
+            ?? list.max { ($0["width"].int ?? 0) < ($1["width"].int ?? 0) } ?? list.last
         guard var s = best?["url"].string else { return nil }
         if s.hasPrefix("//") { s = "https:" + s }
         return URL(string: s)
+    }
+
+    /// Channel avatars come as tiny `=s68-` / `=s88-` images; ask for a crisp 3× size.
+    static func avatar(_ j: JSON) -> URL? {
+        guard let url = thumbnail(j, minWidth: 0) else { return nil }
+        let str = url.absoluteString
+        guard let r = str.range(of: "=s\\d+-", options: .regularExpression) else { return url }
+        return URL(string: str.replacingCharacters(in: r, with: "=s240-"))
     }
 
     /// Upgrades `=w60-h60` style Google image URLs to a crisp size.

@@ -38,6 +38,32 @@ struct AuthContext: Hashable {
             ?? cookies.first { $0.name == name }?.value
     }
 
+    /// Applies `Set-Cookie` updates (Google rotates session cookies). Returns true if anything changed.
+    mutating func merge(_ updates: [StoredCookie]) -> Bool {
+        var changed = false
+        for u in updates {
+            let d = u.domain.lowercased()
+            guard d.contains("youtube.com") || d.contains("google.com") else { continue }
+            if let i = cookies.firstIndex(where: { $0.name == u.name && $0.domain.lowercased() == d && $0.path == u.path }) {
+                if cookies[i].value != u.value || cookies[i].expires != u.expires {
+                    cookies[i] = u
+                    changed = true
+                }
+            } else {
+                cookies.append(u)
+                changed = true
+            }
+        }
+        // Drop cookies the server expired (but never the core session identifiers).
+        let now = Date()
+        let before = cookies.count
+        cookies.removeAll { c in
+            guard let e = c.expires, e < now else { return false }
+            return !["SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID", "SID", "HSID", "SSID"].contains(c.name)
+        }
+        return changed || cookies.count != before
+    }
+
     var isValid: Bool { value("SAPISID") != nil || value("__Secure-3PAPISID") != nil }
 
     /// `Authorization` header expected by InnerTube for cookie sessions.

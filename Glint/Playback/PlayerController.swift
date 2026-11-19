@@ -74,7 +74,13 @@ final class PlayerController {
     @ObservationIgnored var pip: AVPictureInPictureController?
     @ObservationIgnored private var nowPlaying: NowPlaying!
     @ObservationIgnored private var lastNowPlayingUpdate = Date.distantPast
-    @ObservationIgnored private var triedFallback = false
+    @ObservationIgnored private var failures = 0
+    @ObservationIgnored private var resolvedAt = Date()
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var activeVideoId: String?
+    @ObservationIgnored private var activeIsMusic = false
+    @ObservationIgnored private var lastPositionSave = Date.distantPast
+    @ObservationIgnored private var prefetchedNext = false
 
     private init() {
         rate = Float(settings.playbackSpeed)
@@ -219,11 +225,16 @@ final class PlayerController {
 
     private func start() {
         guard let item = current else { return }
+        savePosition()
+        activeVideoId = item.videoId
+        activeIsMusic = item.isMusic
+        prefetchedNext = false
+        refreshTask?.cancel()
         loadTask?.cancel()
         player.replaceCurrentItem(with: nil)
         details = nil; extras = nil; stream = nil; selectedOption = nil
         segments = []; skipped = []; highlight = nil; loadError = nil
-        currentTime = 0; duration = 0; playingResolution = nil; triedFallback = false
+        currentTime = 0; duration = 0; playingResolution = nil; failures = 0
         player.isMuted = false; mutedBySponsor = false
         isLoading = true
         if presentation == .hidden { presentation = item.isMusic ? .mini : .expanded }
@@ -244,7 +255,10 @@ final class PlayerController {
                 self.details = s.details
                 self.selectedOption = self.preferredOption(in: s)
                 self.duration = Double(s.details.lengthSeconds ?? 0)
-                self.installItem(at: 0)
+                self.resolvedAt = Date()
+                let resumeAt = (isMusic || s.isLive) ? nil : PlaybackPositions.position(for: videoId)
+                self.installItem(at: resumeAt ?? 0)
+                if let resumeAt { self.flash("Resuming at \(formatTime(resumeAt))") }
             } catch {
                 guard !Task.isCancelled else { return }
                 self.isLoading = false
@@ -307,7 +321,7 @@ final class PlayerController {
         player.replaceCurrentItem(with: item)
         if time > 0 { player.seek(to: CMTime(seconds: time, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) }
         try? AVAudioSession.sharedInstance().setActive(true)
-        player.playImmediately(atRate: rate)
+        player.playImmediately(atRate: s.isLive ? 1 : rate)
         nowPlaying.update()
     }
 
@@ -337,10 +351,13 @@ final class PlayerController {
             if d.isFinite, d > 0 { duration = d }
         case .failed:
             isLoading = false
-            // A chosen variant may be undecodable on this device; fall back to Auto once.
-            if !triedFallback, selectedOption != nil || !audioOnly {
-                triedFallback = true
-                let t = currentTime
+            failures += 1
+            let t = currentTime
+            if failures == 1 {
+                // Most failures are expired or rejected stream links: fetch fresh ones and continue.
+                refresh(at: t)
+            } else if failures == 2, selectedOption != nil || !audioOnly {
+                // A chosen variant may be undecodable on this device; fall back to a compatible Auto.
                 if selectedOption != nil {
                     selectedOption = nil
                 } else if let s = stream {
@@ -361,12 +378,52 @@ final class PlayerController {
     func togglePlay() { isPlaying ? pause() : resume() }
 
     func resume() {
+        // Stream links expire after ~6 h; refresh them before resuming a long-paused video.
+        if stream != nil, stream?.isLive != true, Date().timeIntervalSince(resolvedAt) > 4 * 3600 {
+            refresh(at: currentTime)
+            return
+        }
         if player.currentItem == nil, current != nil, stream != nil { installItem(at: currentTime); return }
+        // Finished video: play again from the start.
+        if duration > 0, currentTime >= duration - 1 { seek(to: 0) }
         try? AVAudioSession.sharedInstance().setActive(true)
         player.playImmediately(atRate: rate)
     }
 
-    func pause() { player.pause() }
+    func pause() {
+        player.pause()
+        savePosition()
+    }
+
+    /// Re-resolves the current video (fresh URLs) and continues at `time` with the same quality.
+    private func refresh(at time: Double) {
+        guard let id = current?.videoId else { return }
+        StreamResolver.shared.invalidate(id)
+        let keepID = selectedOption?.id
+        isLoading = true
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            do {
+                let s = try await StreamResolver.shared.resolve(videoId: id)
+                guard let self, !Task.isCancelled, self.current?.videoId == id else { return }
+                self.stream = s
+                self.resolvedAt = Date()
+                if let keepID { self.selectedOption = s.options.first { $0.id == keepID } ?? self.preferredOption(in: s) }
+                self.installItem(at: time)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.isLoading = false
+                self.loadError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Remembers where long videos were left so they resume there next time.
+    private func savePosition() {
+        guard let id = activeVideoId, !activeIsMusic, stream?.isLive != true, duration > 0 else { return }
+        PlaybackPositions.save(currentTime, duration: duration, for: id)
+        lastPositionSave = Date()
+    }
 
     func seek(to seconds: Double) {
         let t = max(0, min(seconds, duration > 0 ? duration - 0.5 : seconds))
@@ -385,6 +442,23 @@ final class PlayerController {
             queue.append(QueueItem(video: n))
             index += 1
             start()
+        } else if current?.isMusic == true {
+            extendRadio()
+        }
+    }
+
+    /// Appends more radio tracks for the current song, then moves on to the next one.
+    private func extendRadio() {
+        guard let c = current else { return }
+        let vid = c.videoId
+        Task {
+            guard let more = try? await YouTubeService.shared.musicQueue(videoId: vid, playlistId: nil),
+                  self.current?.videoId == vid else { return }
+            let known = Set(self.queue.map(\.videoId))
+            let extra = more.compactMap(QueueItem.init(music:)).filter { !known.contains($0.videoId) }
+            guard !extra.isEmpty else { return }
+            self.queue += extra
+            self.next()
         }
     }
 
@@ -414,6 +488,9 @@ final class PlayerController {
     }
 
     func close() {
+        savePosition()
+        activeVideoId = nil
+        refreshTask?.cancel()
         loadTask?.cancel()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -434,13 +511,29 @@ final class PlayerController {
 
     private func tick(_ t: Double) {
         guard t.isFinite else { return }
-        currentTime = t
+        // @Observable notifies on every assignment, so only write real changes
+        // (paused/buffering ticks would otherwise still redraw the timeline).
+        if abs(t - currentTime) >= 0.05 { currentTime = t }
         if let d = player.currentItem?.duration.seconds, d.isFinite, d > 0, abs(d - duration) > 1 { duration = d }
         sponsorCheck(t)
+        if Date().timeIntervalSince(lastPositionSave) > 10 { savePosition() }
+        prefetchNextIfNeeded(t)
         if Date().timeIntervalSince(lastNowPlayingUpdate) > 5 {
             lastNowPlayingUpdate = Date()
             nowPlaying.update()
         }
+    }
+
+    /// Resolves the next video's streams shortly before the end so autoplay starts instantly.
+    private func prefetchNextIfNeeded(_ t: Double) {
+        guard !prefetchedNext, duration > 60, duration - t < 45, let c = current else { return }
+        let nextId: String?
+        if index + 1 < queue.count { nextId = queue[index + 1].videoId }
+        else if !c.isMusic, settings.autoplay { nextId = extras?.related.first?.id }
+        else { nextId = nil }
+        guard let nextId else { return }
+        prefetchedNext = true
+        Task.detached(priority: .utility) { _ = try? await StreamResolver.shared.resolve(videoId: nextId) }
     }
 
     private func sponsorCheck(_ t: Double) {
@@ -470,16 +563,7 @@ final class PlayerController {
         } else if !c.isMusic, settings.autoplay, extras?.related.first != nil {
             next()
         } else if c.isMusic {
-            // Keep the radio going.
-            let vid = c.videoId
-            Task {
-                guard let more = try? await YouTubeService.shared.musicQueue(videoId: vid, playlistId: nil) else { return }
-                let known = Set(self.queue.map(\.videoId))
-                let extra = more.compactMap(QueueItem.init(music:)).filter { !known.contains($0.videoId) }
-                guard !extra.isEmpty else { return }
-                self.queue += extra
-                self.next()
-            }
+            extendRadio()   // keep the radio going
         }
     }
 
@@ -502,6 +586,7 @@ final class PlayerController {
     func detach(_ layer: AVPlayerLayer) { layers.remove(layer) }
 
     private func enteredBackground() {
+        savePosition()
         // Leave the layer alone while Picture in Picture is running or about to start automatically.
         let pipStarting = pip.map { $0.isPictureInPictureActive || ($0.canStartPictureInPictureAutomaticallyFromInline && $0.isPictureInPicturePossible && isPlaying) } ?? false
         guard current != nil, !isPiPActive, !pipStarting else { return }
@@ -515,5 +600,33 @@ final class PlayerController {
 
     private func enteringForeground() {
         for l in layers.allObjects { l.player = player }
+    }
+}
+
+/// Per-video resume points for longer videos, kept in UserDefaults (bounded).
+enum PlaybackPositions {
+    private static let key = "playbackPositions.v1"
+    private static let limit = 300
+
+    static func position(for id: String) -> Double? {
+        guard let entry = (UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]])?[id],
+              let t = entry.first, t > 0 else { return nil }
+        return t
+    }
+
+    static func save(_ t: Double, duration: Double, for id: String) {
+        var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]]) ?? [:]
+        if duration >= 300, t > 20, t < duration - 30 {
+            all[id] = [t, Date().timeIntervalSince1970]
+        } else if t > 0 {
+            all[id] = nil                     // short video or watched to the end
+        } else {
+            return
+        }
+        if all.count > limit {
+            let drop = all.sorted { ($0.value.last ?? 0) < ($1.value.last ?? 0) }.prefix(all.count - limit)
+            for (k, _) in drop { all[k] = nil }
+        }
+        UserDefaults.standard.set(all, forKey: key)
     }
 }
