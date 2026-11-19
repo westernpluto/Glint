@@ -355,15 +355,25 @@ struct WatchDetails: View {
                         Button {
                             let now = !liked
                             liked = now
-                            Task { try? await YouTubeService.shared.rate(id, now ? .like : .none) }
+                            Task {
+                                do { try await YouTubeService.shared.rate(id, now ? .like : .none) } catch {
+                                    // Didn't go through: show the real state again.
+                                    if liked == now { liked = !now }
+                                    player.flash("Couldn't update your like")
+                                }
+                            }
                         } label: {
                             pill(player.extras?.likeCount ?? "Like", liked ? "hand.thumbsup.fill" : "hand.thumbsup", on: liked)
                         }
                         .sensoryFeedback(.impact(weight: .light), trigger: liked)
                         Button {
                             Task {
-                                try? await YouTubeService.shared.saveToWatchLater(id)
-                                player.flash("Saved to Watch later")
+                                do {
+                                    try await YouTubeService.shared.saveToWatchLater(id)
+                                    player.flash("Saved to Watch later")
+                                } catch {
+                                    player.flash("Couldn't save to Watch later")
+                                }
                             }
                         } label: { pill("Watch later", "clock") }
                     } else if let likes = player.extras?.likeCount {
