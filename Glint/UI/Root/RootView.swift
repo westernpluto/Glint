@@ -93,36 +93,18 @@ private struct SectionStack: View {
     }
 }
 
-/// Account switcher + settings. Uses an icon *and* a title so the system can place it in
-/// a vertical bar, a horizontal bar or the overflow menu on iPhone Duo.
+/// The profile button: one tap opens Account & Settings (the familiar top-right pattern).
+/// Icon *and* title so iPhone Duo can place it in a vertical bar or the overflow menu.
 struct AccountToolbarItem: ToolbarContent {
     @Binding var showSettings: Bool
     @Environment(AccountStore.self) private var accounts
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Menu {
-                if !accounts.accounts.isEmpty {
-                    Section("Accounts") {
-                        ForEach(accounts.accounts) { a in
-                            Button {
-                                accounts.switchTo(a.id)
-                            } label: {
-                                if a.id == accounts.activeID {
-                                    Label(a.info.name, systemImage: "checkmark")
-                                } else {
-                                    Text(a.info.name)
-                                }
-                            }
-                        }
-                        if accounts.isSignedIn {
-                            Button("Browse signed out") { accounts.switchTo(nil) }
-                        }
-                    }
-                }
-                Button { showSettings = true } label: { Label("Settings & accounts", systemImage: "gearshape") }
+            Button {
+                showSettings = true
             } label: {
-                Label(accounts.active?.info.name ?? "Account",
+                Label(accounts.isSignedIn ? "Account & Settings" : "Sign in & Settings",
                       systemImage: accounts.isSignedIn ? "person.crop.circle.fill" : "person.crop.circle")
             }
         }

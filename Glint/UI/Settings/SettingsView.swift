@@ -98,7 +98,7 @@ struct SettingsView: View {
                     Text("Glint talks to YouTube directly with its own player, so ads, promoted videos and sponsored shelves are never loaded.")
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("Account & Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarPinnedTrailing) {

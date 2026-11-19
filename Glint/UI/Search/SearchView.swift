@@ -8,6 +8,8 @@ enum SearchScope: String, CaseIterable, Identifiable {
 }
 
 /// One search for everything, with a clear YouTube / Music switch.
+/// Uses its own search field (not the system-placed one) so it works the same on both
+/// displays, including when iPhone Duo shows its bars vertically.
 struct SearchView: View {
     @Environment(AppRouter.self) private var router
     @Environment(\.screenClass) private var screen
@@ -15,51 +17,34 @@ struct SearchView: View {
     @State private var submitted = ""
     @State private var filter: SearchFilter = .all
     @State private var suggestions: [String] = []
+    @FocusState private var focused: Bool
     @AppStorage("recentSearches") private var recentRaw = ""
 
     private var recents: [String] { recentRaw.split(separator: "\n").map(String.init) }
     private var scope: SearchScope { router.searchScope }
 
     var body: some View {
-        Group {
-            if submitted.isEmpty {
-                recentList
-            } else if scope == .youtube {
-                FeedScreen(reloadKey: "\(submitted)|\(filter.rawValue)", endpoint: .search,
-                           emptyTitle: "No results", emptyIcon: "magnifyingglass") {
-                    try await YouTubeService.shared.search(submitted, filter: filter)
-                } header: {
-                    VStack(alignment: .leading, spacing: 12) {
-                        scopePicker
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(SearchFilter.allCases) { f in
-                                    GlassChip(title: f.title, selected: f == filter) { filter = f }
-                                }
-                            }
-                            .padding(.horizontal, Metrics.gutter(screen))
-                        }
-                    }
-                    .padding(.vertical, 8)
-                }
-            } else {
-                MusicSearchResults(query: submitted) { scopePicker.padding(.top, 8) }
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                searchField
+                scopePicker
             }
+            .padding(.horizontal, Metrics.gutter(screen))
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle("Search")
-        .searchable(text: $text, placement: .automatic, prompt: scope.prompt)
-        .searchSuggestions {
-            ForEach(suggestions, id: \.self) { s in
-                Label(s, systemImage: "magnifyingglass").searchCompletion(s)
-            }
-        }
-        .onSubmit(of: .search) { submit(text) }
+        .navigationBarTitleDisplayMode(.inline)
         .task(id: text) {
+            guard focused, !text.isEmpty, text != submitted else { suggestions = []; return }
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard !Task.isCancelled else { return }
             suggestions = await YouTubeService.shared.suggestions(text)
         }
-        .onChange(of: text) { _, new in if new.isEmpty { submitted = "" } }
+        .onAppear { if submitted.isEmpty { focused = true } }
         #if DEBUG
         .task {
             if submitted.isEmpty, let q = UserDefaults.standard.string(forKey: "GlintQuery"),
@@ -71,24 +56,80 @@ struct SearchView: View {
         #endif
     }
 
+    // MARK: Field
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(scope.prompt, text: $text)
+                .focused($focused)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .onSubmit { submit(text) }
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                    submitted = ""
+                    focused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .font(.body)
+        .padding(.horizontal, 14)
+        .frame(height: 46)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .onTapGesture { focused = true }
+    }
+
     private var scopePicker: some View {
         Picker("Search in", selection: Binding(get: { router.searchScope }, set: { router.searchScope = $0 })) {
             ForEach(SearchScope.allCases) { Text($0.title).tag($0) }
         }
         .pickerStyle(.segmented)
-        .frame(maxWidth: 360)
-        .padding(.horizontal, Metrics.gutter(screen))
+    }
+
+    // MARK: Content
+
+    @ViewBuilder
+    private var content: some View {
+        if focused, !text.isEmpty, text != submitted, !suggestions.isEmpty {
+            List(suggestions, id: \.self) { s in
+                Button { text = s; submit(s) } label: {
+                    Label(s, systemImage: "magnifyingglass").foregroundStyle(.primary)
+                }
+            }
+            .listStyle(.plain)
+        } else if submitted.isEmpty {
+            recentList
+        } else if scope == .youtube {
+            FeedScreen(reloadKey: "\(submitted)|\(filter.rawValue)", endpoint: .search,
+                       emptyTitle: "No results", emptyIcon: "magnifyingglass") {
+                try await YouTubeService.shared.search(submitted, filter: filter)
+            } header: {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(SearchFilter.allCases) { f in
+                            GlassChip(title: f.title, selected: f == filter) { filter = f }
+                        }
+                    }
+                    .padding(.horizontal, Metrics.gutter(screen))
+                }
+                .padding(.vertical, 6)
+            }
+            .scrollDismissesKeyboard(.immediately)
+        } else {
+            MusicSearchResults(query: submitted) { EmptyView() }
+                .scrollDismissesKeyboard(.immediately)
+        }
     }
 
     private var recentList: some View {
         List {
-            Section {
-                scopePicker
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .padding(.vertical, 8)
-            }
             if recents.isEmpty {
                 EmptyState(title: scope == .youtube ? "Search YouTube" : "Search Music",
                            icon: scope == .youtube ? "magnifyingglass" : "music.note",
@@ -118,11 +159,14 @@ struct SearchView: View {
             }
         }
         .listStyle(.plain)
+        .scrollDismissesKeyboard(.immediately)
     }
 
     private func submit(_ q: String) {
         let query = q.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
+        focused = false
+        suggestions = []
         submitted = query
         var list = recents.filter { $0.caseInsensitiveCompare(query) != .orderedSame }
         list.insert(query, at: 0)

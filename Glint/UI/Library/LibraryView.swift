@@ -6,7 +6,6 @@ struct LibraryView: View {
     @State private var playlists: [PlaylistItem] = []
     @State private var loadedGeneration: Int?
     @State private var confirmClear = false
-    @State private var showSettings = false
     private var history: WatchHistory { WatchHistory.shared }
 
     var body: some View {
@@ -34,8 +33,6 @@ struct LibraryView: View {
                 } else {
                     signInCard
                 }
-
-                accountAndSettings
 
                 if history.recent.isEmpty {
                     Label("Videos you watch show up here, so you can pick up where you left off.",
@@ -74,51 +71,6 @@ struct LibraryView: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text).font(.title3.weight(.bold)).padding(.horizontal, Metrics.gutter(screen))
-    }
-
-    /// Who you are and where settings live — visible, not hidden in a menu.
-    private var accountAndSettings: some View {
-        VStack(spacing: 0) {
-            if let a = accounts.active {
-                HStack(spacing: 12) {
-                    Avatar(url: a.info.avatar, size: 40)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(a.info.name).font(.subheadline.weight(.semibold))
-                        if let h = a.info.handle { Text(h).font(.caption).foregroundStyle(.secondary) }
-                    }
-                    Spacer()
-                    if accounts.accounts.count > 1 {
-                        Menu {
-                            ForEach(accounts.accounts) { other in
-                                Button(other.info.name) { accounts.switchTo(other.id) }
-                            }
-                        } label: {
-                            Text("Switch").font(.subheadline.weight(.semibold))
-                        }
-                    }
-                }
-                .padding(14)
-                Divider().padding(.leading, 14)
-            }
-            Button { showSettings = true } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "gearshape").font(.headline).foregroundStyle(.tint).frame(width: 26)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Settings").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                        Text("Accounts, quality, SponsorBlock, playback")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-                }
-                .padding(14)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .background(Color.cardFill, in: RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous))
-        .padding(.horizontal, Metrics.gutter(screen))
-        .sheet(isPresented: $showSettings) { SettingsView() }
     }
 
     private var signInCard: some View {

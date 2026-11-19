@@ -25,6 +25,8 @@ enum Parser {
         func add(_ item: FeedItem?) {
             guard let item else { return }
             if hideShorts, case .video(let v) = item, v.isShort { return }
+            // YouTube "Mix" radios (RD…) aren't browsable playlists; skip them rather than show a dead end.
+            if case .playlist(let p) = item, p.id.hasPrefix("RD") { return }
             if seen.insert(item.id).inserted { items.append(item) }
         }
 
