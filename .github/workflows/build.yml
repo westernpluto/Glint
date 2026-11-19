@@ -112,6 +112,8 @@ jobs:
 
   screenshots:
     name: Simulator screenshots (design review)
+    # Opt-in: run by hand (Actions → Run workflow) or put [screenshots] in the commit message.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[screenshots]')
     runs-on: xcode-27
     timeout-minutes: 60
     continue-on-error: true

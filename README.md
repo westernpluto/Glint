@@ -35,7 +35,7 @@ The app builds only on GitHub Actions. The workflow is `.github/workflows/build.
 3. Builds an unsigned Release build for devices.
 4. Packages it as **`Glint.ipa`** and uploads it as the `Glint-<version>-build<build>-ipa` artifact. The build log is uploaded too.
 
-A second job, `screenshots`, builds a Debug simulator app and captures the main screens for design review: iPhone Duo outer display, plus an iPad mini as a stand-in for the regular-width inner display. It uploads them as the `screenshots` artifact. The job is informational and never blocks the `.ipa`.
+A second, opt-in job, `screenshots` (run it from the Actions tab, or put `[screenshots]` in a commit message), builds a Debug simulator app and captures the main screens for design review: iPhone Duo outer display, plus an iPad mini as a stand-in for the regular-width inner display. It uploads them as the `screenshots` artifact. The job is informational and never blocks the `.ipa`.
 
 The workflow runs on every push and pull request. You can also start it by hand from the Actions tab (`workflow_dispatch`).
 
