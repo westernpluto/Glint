@@ -77,7 +77,7 @@ final class InnerTube: @unchecked Sendable {
         if let v = visitorData { req.setValue(v, forHTTPHeaderField: "X-Goog-Visitor-Id") }
 
         // Cookie auth only works for the browser clients.
-        let browserClient = client.clientName.hasPrefix("WEB")
+        let browserClient = client.clientName.hasPrefix("WEB") || client.clientName == "MWEB"
         let usedAuth = (authenticated && browserClient) ? auth : nil
         if let auth = usedAuth, auth.isValid {
             req.setValue(auth.cookieHeader(forHost: client.host), forHTTPHeaderField: "Cookie")

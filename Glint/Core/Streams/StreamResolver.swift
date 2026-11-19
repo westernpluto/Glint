@@ -139,27 +139,48 @@ final class StreamResolver: @unchecked Sendable {
         return stream
     }
 
-    private func resolveFresh(videoId: String) async throws -> ResolvedStream {
+    private func resolveFresh(videoId: String, isRetry: Bool = false) async throws -> ResolvedStream {
         var lastReason: String?
         var limited: ResolvedStream?
         var progressive: ResolvedStream?
-        for client in orderedClients {
+        var refusals = 0, botChecks = 0
+        let signedIn = tube.isSignedIn
+        var order = orderedClients
+        if signedIn, let i = order.firstIndex(where: \.isWebPlayback) {
+            // Signed in, the web client carries the account (yt-dlp's choice with cookies).
+            order.insert(order.remove(at: i), at: 0)
+        }
+        for client in order {
             var webPlayer: JSChallengeSolver.Player?
+            var playerToken: String?
             if client.isWebPlayback {
                 if tube.visitorData == nil { await tube.warmUp() }
                 do { webPlayer = try await JSChallengeSolver.shared.player(session: tube.session) } catch {
                     trace?("\(client.key): player script unavailable (\(error.localizedDescription))")
                     continue
                 }
+                // A token bound to the video, sent with the request like the website does;
+                // it's what YouTube looks at before asking "are you a bot?".
+                do {
+                    playerToken = try await PoTokenProvider.shared.token(for: videoId, visitorData: tube.visitorData)
+                } catch {
+                    trace?("\(client.key): player PO token failed (\(error.localizedDescription))")
+                }
             }
             var json: JSON
-            do { json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts) } catch {
+            do {
+                json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
+                                        poToken: playerToken, authenticated: client.isWebPlayback)
+            } catch {
                 trace?("\(client.key): request failed (\(error.localizedDescription))")
                 continue
             }
             guard json.at("playabilityStatus.status").string == "OK" else {
-                lastReason = json.at("playabilityStatus.reason").string ?? lastReason
-                trace?("\(client.key): \(json.at("playabilityStatus.status").string ?? "?") \(json.at("playabilityStatus.reason").string ?? "")")
+                let reason = json.at("playabilityStatus.reason").string
+                lastReason = reason ?? lastReason
+                refusals += 1
+                if Self.isBotCheck(reason) { botChecks += 1 }
+                trace?("\(client.key)\(client.isWebPlayback && signedIn ? " (signed in)" : ""): \(json.at("playabilityStatus.status").string ?? "?") \(reason ?? "")")
                 continue
             }
             if let webPlayer { json = await prepareWebFormats(json, client: client, player: webPlayer) }
@@ -195,7 +216,26 @@ final class StreamResolver: @unchecked Sendable {
             limited.isPartial = true
             return limited
         }
+        if refusals > 0, botChecks == refusals {
+            // YouTube flags the visitor session (and the network it comes from). A new visitor
+            // id sometimes clears it; signing in is yt-dlp's real answer.
+            if !isRetry, !signedIn {
+                trace?("Every client got the bot check: retrying once with a new visitor id")
+                tube.visitorData = nil
+                await tube.warmUp()
+                await PoTokenProvider.shared.reset()
+                return try await resolveFresh(videoId: videoId, isRetry: true)
+            }
+            throw InnerTubeError.unplayable(signedIn
+                ? "YouTube is asking to confirm you're not a bot, even signed in. Try again in a while or on another network."
+                : "YouTube is asking to confirm you're not a bot. Sign in to YouTube in Settings, then try again.")
+        }
         throw InnerTubeError.unplayable(lastReason ?? "This video can't be played right now.")
+    }
+
+    private static func isBotCheck(_ reason: String?) -> Bool {
+        guard let r = reason?.lowercased() else { return false }
+        return r.contains("not a bot") || (r.contains("sign in") && r.contains("confirm"))
     }
 
     private func build(_ json: JSON, client: ClientProfile) async -> ResolvedStream? {
@@ -306,15 +346,18 @@ final class StreamResolver: @unchecked Sendable {
 
     // MARK: Requests
 
-    private func player(videoId: String, client: ClientProfile, sts: Int? = nil) async throws -> JSON {
+    private func player(videoId: String, client: ClientProfile, sts: Int? = nil,
+                        poToken: String? = nil, authenticated: Bool = false) async throws -> JSON {
         var playback: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
         if let sts { playback["signatureTimestamp"] = sts }
-        return try await tube.call("player", client: client, body: [
+        var body: [String: Any] = [
             "videoId": videoId,
             "contentCheckOk": true,
             "racyCheckOk": true,
             "playbackContext": ["contentPlaybackContext": playback],
-        ], authenticated: false)
+        ]
+        if let poToken { body["serviceIntegrityDimensions"] = ["poToken": poToken] }
+        return try await tube.call("player", client: client, body: body, authenticated: authenticated)
     }
 
     // MARK: Web clients
@@ -353,7 +396,10 @@ final class StreamResolver: @unchecked Sendable {
     private func prepareWebFormats(_ json: JSON, client: ClientProfile, player: JSChallengeSolver.Player) async -> JSON {
         let keys = ["adaptiveFormats", "formats"]
         let pending = keys.flatMap { json.at("streamingData.\($0)").array.compactMap(PendingLink.init) }
-        guard !pending.isEmpty else { return json }
+        guard !pending.isEmpty else {
+            trace?("\(client.key): YouTube sent no direct links (streaming-protocol-only session)")
+            return json
+        }
 
         let solutions: JSChallengeSolver.Solutions
         do {
@@ -365,8 +411,11 @@ final class StreamResolver: @unchecked Sendable {
         }
 
         var pot: String?
-        if let visitorData = tube.visitorData {
-            let binding = PoTokenProvider.contentBinding(visitorData: visitorData)
+        let visitorData = tube.visitorData
+        // yt-dlp binds the stream token to the account's data sync id when signed in, to the
+        // visitor id otherwise.
+        let dataSyncId = json.at("responseContext.mainAppWebResponseContext.datasyncId").string
+        if let binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:)) {
             do {
                 pot = try await PoTokenProvider.shared.token(for: binding, visitorData: visitorData)
             } catch {
