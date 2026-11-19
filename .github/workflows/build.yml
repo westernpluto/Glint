@@ -22,14 +22,19 @@ jobs:
       - name: Select Xcode 27
         run: |
           set -euo pipefail
-          XC=""
-          for c in /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode27*.app /Applications/Xcode.app; do
-            if [ -d "$c" ] && "$c/Contents/Developer/usr/bin/xcodebuild" -version | grep -q "^Xcode 27"; then XC="$c"; fi
+          # Newest installed Xcode 27.x (the iPhone Duo APIs need the 27.1+ SDK).
+          XC=""; BEST=""
+          for c in /Applications/Xcode*.app; do
+            [ -x "$c/Contents/Developer/usr/bin/xcodebuild" ] || continue
+            V=$("$c/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | awk '/^Xcode /{print $2; exit}')
+            case "$V" in 27*) ;; *) continue ;; esac
+            if [ -z "$BEST" ] || [ "$(printf '%s\n%s\n' "$BEST" "$V" | sort -V | tail -n1)" = "$V" ]; then BEST="$V"; XC="$c"; fi
           done
           if [ -z "$XC" ]; then
             echo "::warning::No Xcode 27 found in /Applications, using the runner default"
             XC="$(dirname "$(dirname "$(xcode-select -p)")")"
           fi
+          echo "Using $XC ($BEST)"
           echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
           DEVELOPER_DIR="$XC/Contents/Developer" xcodebuild -version
           DEVELOPER_DIR="$XC/Contents/Developer" xcodebuild -showsdks | grep -i iphoneos || true
@@ -118,11 +123,19 @@ jobs:
       - name: Select Xcode 27
         run: |
           set -euo pipefail
-          XC=""
-          for c in /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode27*.app /Applications/Xcode.app; do
-            if [ -d "$c" ] && "$c/Contents/Developer/usr/bin/xcodebuild" -version | grep -q "^Xcode 27"; then XC="$c"; fi
+          # Newest installed Xcode 27.x (the iPhone Duo APIs need the 27.1+ SDK).
+          XC=""; BEST=""
+          for c in /Applications/Xcode*.app; do
+            [ -x "$c/Contents/Developer/usr/bin/xcodebuild" ] || continue
+            V=$("$c/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | awk '/^Xcode /{print $2; exit}')
+            case "$V" in 27*) ;; *) continue ;; esac
+            if [ -z "$BEST" ] || [ "$(printf '%s\n%s\n' "$BEST" "$V" | sort -V | tail -n1)" = "$V" ]; then BEST="$V"; XC="$c"; fi
           done
-          if [ -z "$XC" ]; then XC="$(dirname "$(dirname "$(xcode-select -p)")")"; fi
+          if [ -z "$XC" ]; then
+            echo "::warning::No Xcode 27 found in /Applications, using the runner default"
+            XC="$(dirname "$(dirname "$(xcode-select -p)")")"
+          fi
+          echo "Using $XC ($BEST)"
           echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
 
       - name: Install XcodeGen
@@ -142,7 +155,7 @@ jobs:
           set +e
           xcodebuild -project Glint.xcodeproj -scheme Glint -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build > sim-build.log 2>&1
+            -derivedDataPath build-sim ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build > sim-build.log 2>&1
           STATUS=$?
           set -e
           grep -E "error:|\*\* BUILD" sim-build.log || true
