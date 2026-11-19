@@ -8,13 +8,18 @@ struct HomeView: View {
         FeedScreen(reloadKey: "\(accounts.generation)-\(settings.hideShorts)",
                    emptyTitle: accounts.isSignedIn ? "Your feed is empty" : "Search to get started",
                    emptyIcon: accounts.isSignedIn ? "house" : "magnifyingglass") {
-            try await YouTubeService.shared.home()
+            let svc = YouTubeService.shared
+            if InnerTube.shared.isSignedIn {
+                let page = try await svc.home()
+                return page.items.isEmpty ? try await svc.trending() : page
+            }
+            return try await svc.trending()
         } header: {
             if !accounts.isSignedIn {
                 SignedOutBanner()
             }
         }
-        .navigationTitle("Home")
+        .navigationTitle(accounts.isSignedIn ? "Home" : "Trending")
     }
 }
 

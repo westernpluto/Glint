@@ -104,3 +104,57 @@ jobs:
           name: build-log
           path: build.log
           if-no-files-found: ignore
+
+  screenshots:
+    name: Simulator screenshots (design review)
+    runs-on: xcode-27
+    timeout-minutes: 60
+    continue-on-error: true
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 27
+        run: |
+          set -euo pipefail
+          XC=""
+          for c in /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode27*.app /Applications/Xcode.app; do
+            if [ -d "$c" ] && "$c/Contents/Developer/usr/bin/xcodebuild" -version | grep -q "^Xcode 27"; then XC="$c"; fi
+          done
+          if [ -z "$XC" ]; then XC="$(dirname "$(dirname "$(xcode-select -p)")")"; fi
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          if command -v xcodegen >/dev/null 2>&1; then exit 0; fi
+          if command -v brew >/dev/null 2>&1 && brew install xcodegen; then exit 0; fi
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip
+          unzip -q -o "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP/xcodegen"
+          dirname "$(find "$RUNNER_TEMP/xcodegen" -type f -name xcodegen -perm -u+x | head -n1)" >> "$GITHUB_PATH"
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build for simulator (Debug)
+        run: |
+          set +e
+          xcodebuild -project Glint.xcodeproj -scheme Glint -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build > sim-build.log 2>&1
+          STATUS=$?
+          set -e
+          grep -E "error:|\*\* BUILD" sim-build.log || true
+          if [ "$STATUS" -ne 0 ]; then tail -n 150 sim-build.log; exit "$STATUS"; fi
+
+      - name: Capture screenshots
+        run: scripts/screenshots.sh build-sim/Build/Products/Debug-iphonesimulator/Glint.app screenshots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots
+          if-no-files-found: ignore

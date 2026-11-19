@@ -99,7 +99,11 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarPinnedTrailing) {
+                    Button("Done", systemImage: "checkmark") { dismiss() }
+                }
+            }
             .sheet(isPresented: $showSignIn) { SignInView() }
         }
     }

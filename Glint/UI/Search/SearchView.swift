@@ -45,6 +45,15 @@ struct SearchView: View {
             suggestions = await YouTubeService.shared.suggestions(text)
         }
         .onChange(of: text) { _, new in if new.isEmpty { submitted = "" } }
+        #if DEBUG
+        .task {
+            if submitted.isEmpty, let q = UserDefaults.standard.string(forKey: "GlintQuery"),
+               UserDefaults.standard.string(forKey: "GlintScene") == "search" {
+                text = q
+                submit(q)
+            }
+        }
+        #endif
     }
 
     private var recentList: some View {

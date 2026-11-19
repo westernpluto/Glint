@@ -1,15 +1,14 @@
 import SwiftUI
 
-/// Which physical display the app is drawing on.
-/// - `.compact`: the front/cover screen (phone-sized), or any narrow window.
-/// - `.expanded`: the large inner screen when unfolded (tablet-like, near square).
+/// How much room the app has. Derived from size classes (never from device idiom,
+/// orientation or screen size), as Apple recommends for iPhone Duo.
+/// - `.compact`: compact width — the outer display, or a narrow window.
+/// - `.expanded`: regular width — the inner display when unfolded.
 enum ScreenClass: Hashable {
     case compact, expanded
 
-    static func from(_ size: CGSize) -> ScreenClass {
-        // The inner display is wide *and* tall. A phone-sized cover screen in landscape
-        // is wide but short, so it stays compact (and gets the immersive landscape player).
-        size.width >= 600 && size.height >= 500 ? .expanded : .compact
+    init(_ horizontal: UserInterfaceSizeClass?) {
+        self = horizontal == .regular ? .expanded : .compact
     }
 }
 
@@ -21,16 +20,38 @@ extension EnvironmentValues {
         get { self[ScreenClassKey.self] }
         set { self[ScreenClassKey.self] = newValue }
     }
+    /// Size of the app's root container (not the screen).
     var containerSize: CGSize {
         get { self[ContainerSizeKey.self] }
         set { self[ContainerSizeKey.self] = newValue }
     }
 }
 
+/// The iPhone Duo fold, read from the view's reserved regions.
+enum Fold {
+    /// An active fold running top-to-bottom (book posture), in the proxy's coordinates.
+    static func vertical(_ proxy: GeometryProxy) -> CGRect? {
+        divisions(proxy).first { $0.height > $0.width }
+    }
+
+    /// An active fold running side-to-side (laptop / tabletop posture).
+    static func horizontal(_ proxy: GeometryProxy) -> CGRect? {
+        divisions(proxy).first { $0.width >= $0.height }
+    }
+
+    private static func divisions(_ proxy: GeometryProxy) -> [CGRect] {
+        if #available(iOS 27.1, *) {
+            return proxy.reservedRegions(kind: .division, layoutDirectionBehavior: .fixed).map(\.frame)
+        }
+        return []
+    }
+}
+
 enum Metrics {
-    static let corner: CGFloat = 14
+    static let corner: CGFloat = 16
     static func gutter(_ c: ScreenClass) -> CGFloat { c == .expanded ? 24 : 16 }
-    static func gridMinimum(_ c: ScreenClass) -> CGFloat { c == .expanded ? 290 : 320 }
+    static func gridMinimum(_ c: ScreenClass) -> CGFloat { c == .expanded ? 300 : 320 }
+    static let readable: CGFloat = 720
 }
 
 enum AppSection: String, CaseIterable, Identifiable, Hashable {

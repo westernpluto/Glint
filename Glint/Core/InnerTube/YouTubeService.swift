@@ -51,6 +51,13 @@ final class YouTubeService: @unchecked Sendable {
         return Parser.feed(json, hideShorts: hideShorts)
     }
 
+    /// Signed-out home: YouTube's own "Popular on YouTube" channel (YouTube offers no
+    /// anonymous recommendations any more).
+    func trending() async throws -> FeedPage {
+        let json = try await tube.call("browse", body: ["browseId": "UC4R8DWoMoI7CAwX8_LjQHig"], authenticated: false)
+        return Parser.feed(json, hideShorts: hideShorts)
+    }
+
     func subscriptions() async throws -> FeedPage {
         guard tube.isSignedIn else { throw InnerTubeError.notSignedIn }
         let json = try await tube.call("browse", body: ["browseId": "FEsubscriptions"])

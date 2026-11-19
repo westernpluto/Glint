@@ -1,18 +1,18 @@
 import SwiftUI
 
-/// Full-window player host. Chooses the video watch page or the music "Now playing" page,
-/// and the right layout for the cover or inner screen.
+/// Full-window player host: the video watch page, the music Now Playing page, or the
+/// immersive player.
 struct PlayerScreen: View {
     @Environment(PlayerController.self) private var player
-    @Environment(\.screenClass) private var screen
-    @Environment(\.containerSize) private var size
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var drag: CGFloat = 0
 
     var body: some View {
         let isMusic = player.current?.isMusic == true
-        let landscapeCover = screen == .compact && size.width > size.height
+        // A short display (outer screen held sideways) goes straight to an immersive player.
+        let immersive = player.isFullscreen || (verticalSizeClass == .compact && !isMusic && !player.audioOnly)
         Group {
-            if player.isFullscreen || (landscapeCover && !isMusic && !player.audioOnly) {
+            if immersive {
                 FullscreenPlayer(drag: $drag)
             } else if isMusic {
                 NowPlayingView(drag: $drag)
@@ -25,7 +25,7 @@ struct PlayerScreen: View {
     }
 }
 
-/// Drag down to shrink the player into the mini bar.
+/// Drag down to shrink the player into the mini player.
 struct CollapseGesture: ViewModifier {
     @Binding var drag: CGFloat
     @Environment(PlayerController.self) private var player
@@ -53,46 +53,88 @@ extension View {
     func collapsesPlayer(_ drag: Binding<CGFloat>) -> some View { modifier(CollapseGesture(drag: drag)) }
 }
 
-// MARK: Video box
+// MARK: Video
 
-struct VideoBox: View {
-    var fullscreen = false
+/// Just the picture: black backdrop, the video layer, and artwork in audio-only mode.
+struct VideoSurfaceView: View {
     @Environment(PlayerController.self) private var player
-    @Environment(\.screenClass) private var screen
 
     var body: some View {
         ZStack {
             Color.black
             PlayerSurface(primary: true)
             if player.audioOnly, let t = player.current?.thumbnail {
-                RemoteImage(url: t)
-                    .overlay(.black.opacity(0.35))
-                    .overlay { Image(systemName: "headphones").font(.largeTitle).foregroundStyle(.white.opacity(0.9)) }
-                    .clipped()
+                RemoteImage(url: t, contentMode: .fit)
+                    .overlay {
+                        Image(systemName: "headphones")
+                            .font(.largeTitle)
+                            .foregroundStyle(.white)
+                            .padding(18)
+                            .glassEffect(.regular, in: .circle)
+                    }
             }
-            PlayerOverlay(fullscreen: fullscreen) { toggleFullscreen() }
-        }
-    }
-
-    private func toggleFullscreen() {
-        // `fullscreen` is what is on screen now (it can be automatic in landscape).
-        let goingFull = !fullscreen
-        withAnimation(.easeInOut(duration: 0.25)) { player.isFullscreen = goingFull }
-        if screen == .compact {
-            Orientation.request(goingFull ? .landscape : .portrait)
         }
     }
 }
 
-struct FullscreenPlayer: View {
-    @Binding var drag: CGFloat
+/// Video with its controls layered on top.
+struct VideoBox: View {
+    var fullscreen = false
+    @Environment(PlayerController.self) private var player
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
-        VideoBox(fullscreen: true)
-            .ignoresSafeArea()
-            .statusBarHidden()
-            .persistentSystemOverlays(.hidden)
-            .collapsesPlayer($drag)
+        ZStack {
+            VideoSurfaceView()
+            PlayerOverlay(fullscreen: fullscreen) {
+                player.toggleFullscreen(from: fullscreen, rotate: horizontalSizeClass == .compact)
+            }
+        }
+    }
+}
+
+extension PlayerController {
+    /// `from` is what is on screen now (fullscreen can also be automatic on a short display).
+    func toggleFullscreen(from fullscreen: Bool, rotate: Bool) {
+        let goingFull = !fullscreen
+        withAnimation(.easeInOut(duration: 0.25)) { isFullscreen = goingFull }
+        if rotate { Orientation.request(goingFull ? .landscape : .portrait) }
+    }
+}
+
+/// Immersive player. On a half-folded iPhone Duo the overlay arrangement moves the
+/// controls to one side of the fold and keeps the video on the other.
+struct FullscreenPlayer: View {
+    @Binding var drag: CGFloat
+    @Environment(PlayerController.self) private var player
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if #available(iOS 27.1, *) {
+                ArrangementView {
+                    controls
+                } secondary: {
+                    VideoSurfaceView()
+                }
+                .arrangementViewStyle(.overlay)
+            } else {
+                ZStack {
+                    VideoSurfaceView()
+                    controls
+                }
+            }
+        }
+        .statusBarHidden()
+        .persistentSystemOverlays(.hidden)
+        .collapsesPlayer($drag)
+    }
+
+    private var controls: some View {
+        PlayerOverlay(fullscreen: true) {
+            player.toggleFullscreen(from: true, rotate: horizontalSizeClass == .compact)
+        }
     }
 }
 
@@ -102,68 +144,104 @@ struct WatchView: View {
     @Binding var drag: CGFloat
     @Environment(PlayerController.self) private var player
     @Environment(\.screenClass) private var screen
-    @Environment(\.containerSize) private var size
     @State private var channelSheet: Route?
+    @State private var size: CGSize = .zero
+    @State private var horizontalFold = false
 
     var body: some View {
-        Group {
-            if screen == .expanded && size.width >= 1000 {
-                // Inner screen, landscape: theatre player + details on the left, Up next on the right.
-                HStack(alignment: .top, spacing: 0) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            VideoBox().aspectRatio(16 / 9, contentMode: .fit)
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .collapsesPlayer($drag)
-                                .padding([.horizontal, .top], 20)
-                            WatchDetails(channelSheet: $channelSheet).padding(20)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    Divider()
-                    ScrollView { UpNextList().padding(.vertical, 20) }
-                        .frame(width: min(max(size.width * 0.32, 340), 460))
-                }
-            } else if screen == .expanded {
-                // Inner screen, portrait: wide player on top, details and Up next side by side.
-                VStack(spacing: 0) {
-                    VideoBox().aspectRatio(16 / 9, contentMode: .fit)
-                        .collapsesPlayer($drag)
-                    ScrollView {
-                        HStack(alignment: .top, spacing: 24) {
-                            WatchDetails(channelSheet: $channelSheet).frame(maxWidth: .infinity)
-                            UpNextList(compactRows: true).frame(width: size.width * 0.42)
-                        }
-                        .padding(20)
-                    }
-                }
-            } else {
-                // Cover screen.
-                VStack(spacing: 0) {
-                    VideoBox().aspectRatio(16 / 9, contentMode: .fit)
-                        .collapsesPlayer($drag)
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            WatchDetails(channelSheet: $channelSheet)
-                            UpNextList()
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                    }
-                }
-            }
-        }
-        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        // Laptop/tabletop posture: a horizontal fold always means video above, details below.
+        let wide = size.width > size.height && !horizontalFold
+        // Read geometry without wrapping the ArrangementView in another layout container.
+        arrangement(wide: wide, size: size)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .onGeometryChange(for: Bool.self) { Fold.horizontal($0) != nil } action: { horizontalFold = $0 }
+            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
         .sheet(item: $channelSheet) { route in
             NavigationStack {
                 Group {
                     if case .channel(let id, let name) = route { ChannelView(channelId: id, name: name) }
                 }
                 .withRoutes()
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { channelSheet = nil } } }
+                .toolbar {
+                    ToolbarItem(placement: .topBarPinnedTrailing) {
+                        Button("Done", systemImage: "checkmark") { channelSheet = nil }
+                    }
+                }
             }
         }
         .onChange(of: player.current?.videoId) { _, _ in channelSheet = nil }
+    }
+
+    @ViewBuilder
+    private func arrangement(wide: Bool, size: CGSize) -> some View {
+        // Tall: the video gets exactly its 16:9 height (capped at half the display).
+        let videoShare = min(0.5, max(0.22, size.width * 9 / 16 / max(size.height, 1)))
+        if #available(iOS 27.1, *) {
+            ArrangementView {
+                primary(wide: wide)
+                    .splitArrangementLayoutRatio(wide ? 0.64 : videoShare)
+            } secondary: {
+                secondary(wide: wide)
+            }
+            .arrangementViewStyle(.split)
+        } else if wide {
+            HStack(spacing: 0) {
+                primary(wide: true)
+                Divider()
+                secondary(wide: true).frame(width: size.width * 0.36)
+            }
+        } else {
+            VStack(spacing: 0) {
+                primary(wide: false).frame(height: size.height * videoShare)
+                secondary(wide: false)
+            }
+        }
+    }
+
+    /// Wide: theatre player with details under it. Tall: just the video.
+    @ViewBuilder
+    private func primary(wide: Bool) -> some View {
+        if wide {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VideoBox()
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .collapsesPlayer($drag)
+                    WatchDetails(channelSheet: $channelSheet)
+                }
+                .padding(20)
+            }
+        } else {
+            VideoBox()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+                .collapsesPlayer($drag)
+        }
+    }
+
+    /// Wide: Up next column. Tall: details then Up next (side by side on a large display).
+    @ViewBuilder
+    private func secondary(wide: Bool) -> some View {
+        ScrollView {
+            if wide {
+                UpNextList().padding(.horizontal, 16).padding(.vertical, 20)
+            } else if screen == .expanded {
+                HStack(alignment: .top, spacing: 28) {
+                    WatchDetails(channelSheet: $channelSheet).frame(maxWidth: .infinity)
+                    UpNextList().frame(maxWidth: 420)
+                }
+                .padding(24)
+            } else {
+                VStack(alignment: .leading, spacing: 22) {
+                    WatchDetails(channelSheet: $channelSheet)
+                    UpNextList()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+            }
+        }
+        .scrollIndicators(.hidden)
     }
 }
 
@@ -177,62 +255,32 @@ struct WatchDetails: View {
     @Binding var channelSheet: Route?
     @Environment(PlayerController.self) private var player
     @Environment(AccountStore.self) private var accounts
+    @Environment(\.screenClass) private var screen
     @State private var expanded = false
     @State private var liked = false
 
     var body: some View {
         let d = player.details
         let item = player.current
-        VStack(alignment: .leading, spacing: 14) {
-            Text(d?.title ?? item?.title ?? "")
-                .font(.title3.weight(.bold))
-                .lineLimit(expanded ? nil : 3)
-                .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(d?.title ?? item?.title ?? " ")
+                    .font(screen == .expanded ? .title2.weight(.bold) : .title3.weight(.bold))
+                    .lineLimit(expanded ? nil : 3)
+                    .textSelection(.enabled)
+                if !meta.isEmpty {
+                    Text(meta).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
 
-            Text(meta)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            if let d {
+                channelRow(d)
+            }
 
             actions
 
-            if let d {
-                HStack(spacing: 12) {
-                    Button {
-                        if let id = d.channelId { channelSheet = .channel(id: id, name: d.channelName) }
-                    } label: {
-                        HStack(spacing: 12) {
-                            Avatar(url: player.extras?.channelAvatar, size: 40)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(d.channelName).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                if let s = player.extras?.subscriberCount {
-                                    Text(s).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                    if let id = d.channelId {
-                        SubscribeButton(channelId: id, initial: player.extras?.isSubscribed)
-                            .id(id + "\(player.extras?.isSubscribed == true)")
-                    }
-                }
-
-                if !d.description.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(linkified(d.description))
-                            .font(.subheadline)
-                            .lineLimit(expanded ? nil : 3)
-                            .textSelection(.enabled)
-                        Button(expanded ? "Show less" : "Show more") {
-                            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-                        }
-                        .font(.footnote.weight(.semibold))
-                    }
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.cardFill, in: RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous))
-                }
+            if let d, !d.description.isEmpty {
+                description(d.description)
             }
         }
         .onChange(of: player.current?.videoId) { _, _ in expanded = false; liked = false }
@@ -241,59 +289,101 @@ struct WatchDetails: View {
 
     private var meta: String {
         var parts: [String] = []
-        if let v = player.details?.viewCount {
-            parts.append(v.formatted(.number.notation(.compactName)) + " views")
-        }
+        if let v = player.details?.viewCount { parts.append(v.formatted(.number.notation(.compactName)) + " views") }
         if let date = player.extras?.dateText { parts.append(date) }
         if let r = player.playingResolution, !player.audioOnly { parts.append(r) }
         return parts.joined(separator: " · ")
     }
 
-    private var actions: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                if accounts.isSignedIn, let id = player.current?.videoId {
-                    pill(liked ? "Liked" : (player.extras?.likeCount ?? "Like"),
-                         icon: liked ? "hand.thumbsup.fill" : "hand.thumbsup") {
-                        let now = !liked
-                        liked = now
-                        Task { try? await YouTubeService.shared.rate(id, now ? .like : .none) }
-                    }
-                    pill("Save", icon: "clock") {
-                        Task {
-                            try? await YouTubeService.shared.saveToWatchLater(id)
-                            player.flash("Saved to Watch later")
+    private func channelRow(_ d: VideoDetails) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                if let id = d.channelId { channelSheet = .channel(id: id, name: d.channelName) }
+            } label: {
+                HStack(spacing: 12) {
+                    Avatar(url: player.extras?.channelAvatar, size: 44)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(d.channelName).font(.headline).lineLimit(1)
+                        if let s = player.extras?.subscriberCount {
+                            Text(s).font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                } else if let likes = player.extras?.likeCount {
-                    pill(likes, icon: "hand.thumbsup") {}
-                        .disabled(true)
                 }
-                QualityMenu {
-                    pillLabel(player.selectedOption?.label ?? (player.audioOnly ? "Audio" : "Auto"), icon: "slider.horizontal.3")
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 8)
+            if let id = d.channelId {
+                SubscribeButton(channelId: id, initial: player.extras?.isSubscribed)
+                    .id(id + "\(player.extras?.isSubscribed == true)")
+            }
+        }
+    }
+
+    private var actions: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    if accounts.isSignedIn, let id = player.current?.videoId {
+                        Button {
+                            let now = !liked
+                            liked = now
+                            Task { try? await YouTubeService.shared.rate(id, now ? .like : .none) }
+                        } label: {
+                            Label(player.extras?.likeCount ?? "Like", systemImage: liked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                        }
+                        .sensoryFeedback(.impact(weight: .light), trigger: liked)
+                        Button {
+                            Task {
+                                try? await YouTubeService.shared.saveToWatchLater(id)
+                                player.flash("Saved to Watch later")
+                            }
+                        } label: { Label("Save", systemImage: "clock") }
+                    } else if let likes = player.extras?.likeCount {
+                        Label(likes, systemImage: "hand.thumbsup")
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .glassEffect(.regular, in: .capsule)
+                    }
+                    QualityMenu {
+                        Label(player.audioOnly ? "Audio" : (player.selectedOption?.label ?? "Auto"),
+                              systemImage: "slider.horizontal.3")
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                    }
+                    Button { player.setAudioOnly(!player.audioOnly) } label: {
+                        Label(player.audioOnly ? "Video" : "Audio only",
+                              systemImage: player.audioOnly ? "play.rectangle" : "headphones")
+                    }
+                    if let id = player.current?.videoId, let url = URL(string: "https://youtu.be/\(id)") {
+                        ShareLink(item: url) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                                .padding(.horizontal, 14).padding(.vertical, 9)
+                                .glassEffect(.regular.interactive(), in: .capsule)
+                        }
+                    }
                 }
-                pill(player.audioOnly ? "Video" : "Audio only", icon: player.audioOnly ? "play.rectangle" : "headphones") {
-                    player.setAudioOnly(!player.audioOnly)
-                }
-                if let id = player.current?.videoId, let url = URL(string: "https://youtu.be/\(id)") {
-                    ShareLink(item: url) { pillLabel("Share", icon: "square.and.arrow.up") }
-                }
+                .buttonStyle(.glass)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
             }
         }
         .scrollClipDisabled()
     }
 
-    private func pill(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { pillLabel(title, icon: icon) }.buttonStyle(.plain)
-    }
-
-    private func pillLabel(_ title: String, icon: String) -> some View {
-        Label(title, systemImage: icon)
-            .font(.subheadline.weight(.medium))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Color.cardFill, in: Capsule())
-            .foregroundStyle(.primary)
+    private func description(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(linkified(text))
+                .font(.subheadline)
+                .lineLimit(expanded ? nil : 4)
+                .textSelection(.enabled)
+            Button(expanded ? "Show less" : "Show more") {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            }
+            .font(.footnote.weight(.semibold))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.cardFill, in: RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous))
     }
 
     private func linkified(_ s: String) -> AttributedString {
@@ -313,59 +403,54 @@ struct WatchDetails: View {
 // MARK: Up next
 
 struct UpNextList: View {
-    var compactRows = false
     @Environment(PlayerController.self) private var player
     @Environment(AppSettings.self) private var settings
-    @Environment(\.screenClass) private var screen
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             let upcoming = Array(player.queue.enumerated()).filter { $0.offset > player.index }
             if !upcoming.isEmpty {
-                Text("Queue").font(.headline)
+                Text("Queue").font(.title3.weight(.bold))
                 ForEach(upcoming, id: \.element.id) { pair in
                     Button { player.playQueue(at: pair.offset) } label: {
                         HStack(spacing: 12) {
-                            Thumbnail(url: pair.element.thumbnail, duration: nil, corner: 8).frame(width: 96)
-                            Text(pair.element.title).font(.subheadline).lineLimit(2).foregroundStyle(.primary)
+                            Thumbnail(url: pair.element.thumbnail, duration: nil, corner: 10).frame(width: 120)
+                            Text(pair.element.title).font(.subheadline.weight(.medium)).lineLimit(2).foregroundStyle(.primary)
                             Spacer(minLength: 0)
                         }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
-                Divider().padding(.vertical, 4)
+                Divider().padding(.vertical, 2)
             }
 
-            HStack {
-                Text("Up next").font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Up next").font(.title3.weight(.bold))
                 Spacer()
-                Toggle("Autoplay", isOn: Binding(get: { settings.autoplay }, set: { settings.autoplay = $0 }))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .controlSize(.mini)
-                Text("Autoplay").font(.caption).foregroundStyle(.secondary)
+                Toggle(isOn: Binding(get: { settings.autoplay }, set: { settings.autoplay = $0 })) {
+                    Text("Autoplay").font(.subheadline).foregroundStyle(.secondary)
+                }
+                .toggleStyle(.switch)
+                .fixedSize()
             }
 
             if let related = player.extras?.related, !related.isEmpty {
-                ForEach(related) { v in
-                    if screen == .compact && !compactRows {
-                        VideoRow(video: v, thumbWidth: 150)
-                    } else {
-                        VideoRow(video: v, thumbWidth: compactRows ? 132 : 160)
-                    }
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(related) { VideoRow(video: $0, thumbWidth: 156) }
                 }
-            } else if player.extras == nil && player.details != nil {
-                ForEach(0..<5, id: \.self) { _ in
+            } else if player.extras == nil {
+                ForEach(0..<6, id: \.self) { _ in
                     HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 10).fill(.quaternary).aspectRatio(16 / 9, contentMode: .fit).frame(width: 150)
-                        VStack(alignment: .leading, spacing: 6) {
+                        RoundedRectangle(cornerRadius: 10).fill(.quaternary)
+                            .aspectRatio(16 / 9, contentMode: .fit).frame(width: 156)
+                        VStack(alignment: .leading, spacing: 8) {
                             RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(height: 12)
-                            RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 90, height: 10)
+                            RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 100, height: 10)
                         }
                     }
                 }
             }
         }
-        .padding(.horizontal, screen == .expanded && !compactRows ? 16 : 0)
     }
 }

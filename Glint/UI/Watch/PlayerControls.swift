@@ -229,46 +229,58 @@ struct PlayerOverlay: View {
 
     private var controls: some View {
         ZStack {
-            LinearGradient(colors: [.black.opacity(0.55), .clear, .clear, .black.opacity(0.7)],
+            // A light scrim keeps white text legible on bright video without a heavy gradient.
+            LinearGradient(colors: [.black.opacity(0.35), .clear, .clear, .black.opacity(0.5)],
                            startPoint: .top, endPoint: .bottom)
                 .allowsHitTesting(false)
 
             VStack(spacing: 0) {
-                HStack(spacing: 18) {
-                    Button {
-                        if fullscreen { onToggleFullscreen() } else { player.presentation = .mini }
-                    } label: {
-                        Image(systemName: fullscreen ? "xmark" : "chevron.down")
+                GlassEffectContainer(spacing: 10) {
+                    HStack(spacing: 10) {
+                        glassIcon(fullscreen ? "xmark" : "chevron.down",
+                                  label: fullscreen ? "Exit full screen" : "Minimize") {
+                            if fullscreen { onToggleFullscreen() } else { player.presentation = .mini }
+                        }
+                        Spacer()
+                        if let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
+                            glassIcon("pip.enter", label: "Picture in Picture") { pip.startPictureInPicture() }
+                        }
+                        QualityMenu {
+                            Image(systemName: "gearshape")
+                                .font(.body.weight(.semibold))
+                                .frame(width: 40, height: 40)
+                                .glassEffect(.regular.interactive(), in: .circle)
+                        }
+                        .accessibilityLabel("Quality and speed")
                     }
-                    Spacer()
-                    if let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
-                        Button { pip.startPictureInPicture() } label: { Image(systemName: "pip.enter") }
-                    }
-                    QualityMenu { Image(systemName: "gearshape") }
                 }
-                .font(.title3.weight(.semibold))
-                .padding(.horizontal, 16)
-                .padding(.top, fullscreen ? 20 : 12)
+                .padding(.horizontal, 12)
+                .padding(.top, fullscreen ? 16 : 10)
 
                 Spacer()
 
-                HStack(spacing: fullscreen ? 64 : 44) {
-                    Button { player.previous() } label: { Image(systemName: "backward.end.fill").font(.title3) }
-                        .opacity(player.index > 0 ? 1 : 0.0001)
-                    Button { player.togglePlay(); scheduleHide() } label: {
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: fullscreen ? 46 : 38, weight: .semibold))
-                            .contentTransition(.symbolEffect(.replace))
-                            .frame(width: 64, height: 64)
+                GlassEffectContainer(spacing: 24) {
+                    HStack(spacing: fullscreen ? 40 : 28) {
+                        transport("backward.end.fill", size: 46, label: "Previous") { player.previous() }
+                            .opacity(player.index > 0 ? 1 : 0)
+                            .disabled(player.index == 0)
+                        Button { player.togglePlay(); scheduleHide() } label: {
+                            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: fullscreen ? 34 : 28, weight: .semibold))
+                                .contentTransition(.symbolEffect(.replace))
+                                .frame(width: fullscreen ? 78 : 66, height: fullscreen ? 78 : 66)
+                                .glassEffect(.regular.interactive(), in: .circle)
+                        }
+                        .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                        transport("forward.end.fill", size: 46, label: "Next") { player.next(); scheduleHide() }
                     }
-                    Button { player.next(); scheduleHide() } label: { Image(systemName: "forward.end.fill").font(.title3) }
                 }
 
                 Spacer()
 
-                VStack(spacing: 4) {
+                VStack(spacing: 2) {
                     LiveScrubber(tint: .white) { scheduleHide() }
-                    HStack {
+                    HStack(spacing: 10) {
                         if player.stream?.isLive == true {
                             Label("LIVE", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(.red)
                         } else {
@@ -276,22 +288,45 @@ struct PlayerOverlay: View {
                         }
                         Spacer()
                         if let r = player.playingResolution, !player.audioOnly {
-                            Text(r).foregroundStyle(.white.opacity(0.75))
+                            Text(r)
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .glassEffect(.regular, in: .capsule)
                         }
                         Button(action: onToggleFullscreen) {
                             Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                                 .font(.callout.weight(.semibold))
+                                .frame(width: 32, height: 32)
                         }
-                        .padding(.leading, 10)
+                        .accessibilityLabel(fullscreen ? "Exit full screen" : "Full screen")
                     }
-                    .font(.caption.weight(.medium).monospacedDigit())
+                    .font(.caption.weight(.semibold).monospacedDigit())
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, fullscreen ? 18 : 8)
+                .padding(.bottom, fullscreen ? 14 : 6)
             }
             .foregroundStyle(.white)
             .buttonStyle(.plain)
         }
+    }
+
+    private func glassIcon(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button { action(); scheduleHide() } label: {
+            Image(systemName: symbol)
+                .font(.body.weight(.semibold))
+                .frame(width: 40, height: 40)
+                .glassEffect(.regular.interactive(), in: .circle)
+        }
+        .accessibilityLabel(label)
+    }
+
+    private func transport(_ symbol: String, size: CGFloat, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.title3.weight(.semibold))
+                .frame(width: size, height: size)
+                .glassEffect(.regular.interactive(), in: .circle)
+        }
+        .accessibilityLabel(label)
     }
 
     private func scheduleHide() {

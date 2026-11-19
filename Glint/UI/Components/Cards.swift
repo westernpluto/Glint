@@ -6,28 +6,34 @@ struct VideoCard: View {
     @Environment(PlayerController.self) private var player
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Button { player.play(video) } label: {
                 Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive)
+                    .overlay {
+                        // Thin edge so light thumbnails don't melt into the background.
+                        RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous)
+                            .strokeBorder(.primary.opacity(0.06))
+                    }
             }
             .buttonStyle(.plain)
 
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
                 if let id = video.channelId {
                     NavigationLink(value: Route.channel(id: id, name: video.channelName)) {
-                        Avatar(url: video.channelAvatar, size: 34)
+                        Avatar(url: video.channelAvatar, size: 36)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(video.channelName ?? "Channel")
                 }
                 Button { player.play(video) } label: {
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(video.title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                         Text(video.subtitle)
-                            .font(.caption)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -150,14 +156,14 @@ struct Chip: View {
     var action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
+        if selected {
+            Button(title, action: action)
+                .buttonStyle(.glassProminent)
+                .font(.subheadline.weight(.semibold))
+        } else {
+            Button(title, action: action)
+                .buttonStyle(.glass)
                 .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .foregroundStyle(selected ? Color(uiColor: .systemBackground) : .primary)
-                .background(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary), in: Capsule())
         }
-        .buttonStyle(.plain)
     }
 }

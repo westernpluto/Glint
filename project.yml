@@ -2,16 +2,16 @@ name: Glint
 options:
   bundleIdPrefix: com.glint
   deploymentTarget:
-    iOS: "18.0"
+    iOS: "27.0"
   createIntermediateGroups: true
   generateEmptyDirectories: false
 
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.0.3"
-    CURRENT_PROJECT_VERSION: "4"
-    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    MARKETING_VERSION: "1.1.0"
+    CURRENT_PROJECT_VERSION: "5"
+    IPHONEOS_DEPLOYMENT_TARGET: "27.0"
 
 targets:
   Glint:

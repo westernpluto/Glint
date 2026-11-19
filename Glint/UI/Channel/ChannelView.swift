@@ -53,26 +53,29 @@ struct SubscribeButton: View {
     var body: some View {
         if accounts.isSignedIn {
             let on = subscribed ?? initial ?? false
-            Button {
-                busy = true
-                Task {
-                    do {
-                        try await YouTubeService.shared.setSubscribed(!on, channelId: channelId)
-                        subscribed = !on
-                    } catch {}
-                    busy = false
+            Group {
+                if on {
+                    Button("Subscribed", systemImage: "checkmark") { toggle(on) }
+                        .buttonStyle(.glass)
+                } else {
+                    Button("Subscribe") { toggle(on) }
+                        .buttonStyle(.glassProminent)
                 }
-            } label: {
-                Text(on ? "Subscribed" : "Subscribe")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .foregroundStyle(on ? Color.primary : Color(uiColor: .systemBackground))
-                    .background(on ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.primary), in: Capsule())
             }
-            .buttonStyle(.plain)
+            .font(.subheadline.weight(.semibold))
             .disabled(busy)
             .sensoryFeedback(.selection, trigger: subscribed)
+        }
+    }
+
+    private func toggle(_ on: Bool) {
+        busy = true
+        Task {
+            do {
+                try await YouTubeService.shared.setSubscribed(!on, channelId: channelId)
+                subscribed = !on
+            } catch {}
+            busy = false
         }
     }
 }
