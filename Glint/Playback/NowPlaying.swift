@@ -65,8 +65,8 @@ final class NowPlaying {
         artworkURL = url
         artwork = nil
         Task {
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let image = UIImage(data: data) else { return }
+            // Same cache as the on-screen thumbnail: usually already decoded.
+            guard let image = await ImagePipeline.shared.image(url) else { return }
             guard self.artworkURL == url else { return }
             self.artwork = Self.makeArtwork(image)
             self.update()

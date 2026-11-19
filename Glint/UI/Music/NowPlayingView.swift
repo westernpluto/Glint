@@ -449,7 +449,8 @@ struct LyricsView: View {
         text = nil
         source = nil
         let result = await YouTubeService.shared.lyrics(videoId: id)
-        guard player.current?.videoId == id else { return }
+        // Cancelled (panel closed, song changed): don't remember a failed lookup as "no lyrics".
+        guard !Task.isCancelled, player.current?.videoId == id else { return }
         text = result?.text
         source = result?.source
         loadedFor = id

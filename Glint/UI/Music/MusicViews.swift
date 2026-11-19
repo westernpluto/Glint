@@ -95,7 +95,12 @@ struct MusicHomeView: View {
         for shelf in pages.flatMap(\.shelves) where !shelf.title.isEmpty && seen.insert(shelf.title).inserted {
             merged.append(shelf)
         }
-        if merged.isEmpty { error = InnerTubeError.empty } else { error = nil }
+        if merged.isEmpty {
+            // A failed refresh keeps what's already on screen.
+            if shelves.isEmpty, !Task.isCancelled { error = InnerTubeError.empty }
+            return
+        }
+        error = nil
         shelves = merged
     }
 }
@@ -283,8 +288,10 @@ struct MusicBrowseView: View {
             }
         }
         .overlay {
-            if page == nil && error == nil { ProgressView().controlSize(.large) }
-            else if let error { ErrorState(error: error) { Task { await load() } } }
+            if page == nil {
+                if let error { ErrorState(error: error) { Task { await load() } } }
+                else { ProgressView().controlSize(.large) }
+            }
         }
         .navigationTitle(page?.title ?? title ?? "")
         .navigationBarTitleDisplayMode(.inline)
@@ -298,6 +305,7 @@ struct MusicBrowseView: View {
             page = try await YouTubeService.shared.musicBrowse(browseId)
             error = nil
         } catch {
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
             self.error = error
         }
     }

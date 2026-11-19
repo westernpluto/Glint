@@ -207,8 +207,11 @@ final class PlayerController {
             Task {
                 guard let more = try? await YouTubeService.shared.musicQueue(videoId: vid, playlistId: pl) else { return }
                 guard self.current?.videoId == vid else { return }
-                let extra = more.compactMap(QueueItem.init(music:)).filter { $0.videoId != vid }
-                self.queue = [self.queue[self.index]] + extra
+                // Keep anything queued while the radio loaded, then the radio.
+                let queued = Array(self.queue[(self.index + 1)...])
+                let known = Set(queued.map(\.videoId)).union([vid])
+                let extra = more.compactMap(QueueItem.init(music:)).filter { !known.contains($0.videoId) }
+                self.queue = [self.queue[self.index]] + queued + extra
                 self.index = 0
             }
         }
