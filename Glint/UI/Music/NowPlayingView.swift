@@ -185,15 +185,17 @@ struct NowPlayingView: View {
                 Button { player.togglePlay() } label: {
                     ZStack {
                         if player.isLoading {
-                            ProgressView()
+                            ProgressView().tint(.white)
                         } else {
                             Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                                 .font(.system(size: 30, weight: .bold))
                                 .contentTransition(.symbolEffect(.replace))
                         }
                     }
+                    .foregroundStyle(.white)
                     .frame(width: 80, height: 80)
-                    .glassEffect(.regular.tint(.accentColor.opacity(0.35)).interactive(), in: .circle)
+                    // The one prominent control: solid accent glass, not a washed-out tint.
+                    .glassEffect(.regular.tint(.accentColor).interactive(), in: .circle)
                 }
                 .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                 .sensoryFeedback(.impact(weight: .light), trigger: player.isPlaying)

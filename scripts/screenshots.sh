@@ -47,25 +47,22 @@ run_scene() {  # scene
   sleep 16
 }
 
-# Phase 1: the outer display (the default when the simulated device is closed).
+# Phase 1: the outer display ("primary") — the device starts closed.
+for scene in home watch nowplaying mini; do
+  run_scene "$scene"
+  shot primary "outer-$scene"
+done
+
+# Phase 2: open the device — power the inner panel ("primary-1"), switch the outer one off.
+t 30 xcrun simctl io "$UDID" screenConfig --display=primary-1 power on >>"$LOG" 2>&1 || note "inner power on failed"
+t 30 xcrun simctl io "$UDID" screenConfig --display=primary power off >>"$LOG" 2>&1 || note "outer power off failed"
+sleep 20
 for scene in home watch nowplaying music search mini library; do
   run_scene "$scene"
-  shot 1 "outer-$scene"
+  shot primary-1 "inner-$scene"
 done
 t 30 xcrun simctl ui "$UDID" appearance dark >/dev/null 2>&1 || true
-run_scene home; shot 1 "outer-home-dark"
-run_scene watch; shot 1 "outer-watch-dark"
-t 30 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
-
-# Phase 2: "open" the device — power the inner display, switch the outer one off.
-t 30 xcrun simctl io "$UDID" screenConfig --display=2 power on >>"$LOG" 2>&1 || note "inner power on failed"
-t 30 xcrun simctl io "$UDID" screenConfig --display=1 power off >>"$LOG" 2>&1 || note "outer power off failed"
-sleep 15
-t 90 xcrun simctl io "$UDID" enumerate > "$OUT/enumerate-open.txt" 2>&1 || true
-for scene in home watch nowplaying music; do
-  run_scene "$scene"
-  shot 2 "inner-$scene"
-done
+run_scene watch; shot primary-1 "inner-watch-dark"
 
 t 60 xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
 t 60 xcrun simctl delete "$UDID" >/dev/null 2>&1 || true
