@@ -66,15 +66,15 @@ private struct SignInWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         let onCookies: ([StoredCookie]) -> Void
-        private var delivered = false
         init(onCookies: @escaping ([StoredCookie]) -> Void) { self.onCookies = onCookies }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            guard !delivered, let host = webView.url?.host, host.hasSuffix("youtube.com") else { return }
+            // Not one-shot: if finishing sign-in fails, the next page load tries again
+            // (the sheet ignores repeats while one attempt is in progress).
+            guard let host = webView.url?.host, host.hasSuffix("youtube.com") else { return }
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
                 let relevant = cookies.filter { $0.domain.contains("youtube.com") || $0.domain.contains("google.com") }
                 guard relevant.contains(where: { $0.name == "SAPISID" || $0.name == "__Secure-3PAPISID" }) else { return }
-                self.delivered = true
                 let stored = relevant.map {
                     StoredCookie(name: $0.name, value: $0.value, domain: $0.domain, path: $0.path, expires: $0.expiresDate)
                 }
