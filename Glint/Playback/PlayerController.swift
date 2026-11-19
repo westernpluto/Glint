@@ -139,6 +139,22 @@ final class PlayerController {
         if let s = stream {
             head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.hlsURL != nil ? ", HLS" : "")\(s.sabr != nil ? ", SABR" : "")\(s.progressiveURL != nil ? (s.hlsURL == nil && s.sabr == nil ? ", 360p progressive" : ", 360p fallback ready") : "")")
         }
+        if let s = stream, s.sabr != nil {
+            // Measured download speed vs. what the playing quality needs (video + audio).
+            let mbps: (Double) -> String = { String(format: "%.1f Mbps", $0 / 1_000_000) }
+            var line = "Speed " + (SabrBandwidth.bitsPerSecond.map { "≈ " + mbps($0) } ?? "not measured yet")
+            let playing: DashFormat? = {
+                if let o = selectedOption, case .dash(let f) = o.source { return f }
+                return sabrAutoPick
+            }()
+            if let v = playing, !audioOnly {
+                let need = Double(v.bitrate + (s.audio?.bitrate ?? 0))
+                let label = "\(v.width > 0 ? min(v.width, v.height) : v.height)p"
+                line += ", \(label) needs ≈ " + mbps(need)
+                if let bps = SabrBandwidth.bitsPerSecond, bps < need * 1.2 { line += " (expect buffering)" }
+            }
+            head.append(line)
+        }
         head.append("Position \(formatTime(currentTime)) / \(formatTime(duration)), \(isPlaying ? "playing" : isBuffering ? "buffering" : "paused")\(loadError.map { ", error: \($0)" } ?? "")")
         return (head + [""] + diagnostics).joined(separator: "\n")
     }
