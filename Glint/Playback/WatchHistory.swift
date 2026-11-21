@@ -70,9 +70,10 @@ final class WatchHistory {
     /// or here before). Fresh local progress wins; "watched to the end" clears the point.
     func mergeRemote(_ items: [(id: String, percent: Double, duration: Double)]) {
         guard profile != "guest", !items.isEmpty else { return }
+        remoteSeen += items.count
         let now = Date().timeIntervalSince1970
         var changed = false
-        for it in items where it.duration >= 300 {
+        for it in items where it.duration > 0 {
             let local = points[it.id]
             if let local, now - local.updated < 15 * 60 { continue }   // just watched here
             if it.percent >= 97 {
@@ -104,6 +105,9 @@ final class WatchHistory {
         return min(max(p.time / p.duration, 0), 1)
     }
 
+    /// How many videos YouTube has sent progress for this session (Playback info).
+    @ObservationIgnored private(set) var remoteSeen = 0
+
     /// Videos with a resume point, most recent first.
     var continueWatching: [VideoItem] {
         _ = revision
@@ -112,7 +116,12 @@ final class WatchHistory {
 
     func save(_ t: Double, duration: Double, for id: String) {
         let old = points[id]
-        if duration >= 300, t > 20, t < duration - 30 {
+        // Signed in this mirrors the account (YouTube keeps progress for any partly watched
+        // video, and Glint reports it); signed out, only videos worth resuming.
+        let keep = profile != "guest"
+            ? t > 5 && t < duration * 0.97
+            : duration >= 300 && t > 20 && t < duration - 30
+        if keep {
             points[id] = Point(time: t, duration: duration, updated: Date().timeIntervalSince1970)
         } else if t > 0 {
             points[id] = nil                     // short video, or watched to the end

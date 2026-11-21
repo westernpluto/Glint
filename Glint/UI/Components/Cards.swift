@@ -8,7 +8,7 @@ struct VideoCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Button { player.play(video) } label: {
-                Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, videoId: video.id)
+                Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, videoId: video.id, watchedPercent: video.watchedPercent)
                     .overlay {
                         // Thin edge so light thumbnails don't melt into the background.
                         RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous)
@@ -77,7 +77,7 @@ struct VideoRow: View {
         HStack(alignment: .top, spacing: 4) {
         Button { player.play(video) } label: {
             HStack(alignment: .top, spacing: 12) {
-                Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, corner: 10, videoId: video.id)
+                Thumbnail(url: video.bestThumbnail, duration: video.duration, isLive: video.isLive, corner: 10, videoId: video.id, watchedPercent: video.watchedPercent)
                     .frame(width: thumbWidth)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(video.title)

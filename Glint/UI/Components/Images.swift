@@ -110,9 +110,14 @@ struct Thumbnail: View {
     var corner: CGFloat = Metrics.corner
     /// When set, shows how much of this video you've already watched.
     var videoId: String? = nil
+    /// YouTube's own progress for it (signed in), 0–100, from the feed this card came from.
+    var watchedPercent: Double? = nil
 
     var body: some View {
-        let watched = videoId.flatMap { WatchHistory.shared.progress(for: $0) }
+        // Signed in, the account's progress (what YouTube sent with the card, else the latest
+        // known for the video); signed out, what was watched on this iPhone.
+        let fromCard = AccountStore.shared.isSignedIn ? watchedPercent.map { min(max($0 / 100, 0), 1) } : nil
+        let watched = fromCard.flatMap { $0 > 0 ? $0 : nil } ?? videoId.flatMap { WatchHistory.shared.progress(for: $0) }
         Color.clear
             .aspectRatio(16 / 9, contentMode: .fit)
             .overlay { RemoteImage(url: url) }

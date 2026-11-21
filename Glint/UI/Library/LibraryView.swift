@@ -6,17 +6,30 @@ struct LibraryView: View {
     @State private var playlists: [PlaylistItem] = []
     @State private var loadedGeneration: Int?
     @State private var confirmClear = false
+    /// Signed in: the account's YouTube watch history.
+    @State private var youtubeHistory: [VideoItem] = []
     private var history: WatchHistory { WatchHistory.shared }
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 28) {
-                // On this iPhone — works without an account.
-                if !history.continueWatching.isEmpty {
-                    ShelfRow(section: FeedSection(title: "Continue watching", items: history.continueWatching))
-                }
-                if !history.recent.isEmpty {
-                    ShelfRow(section: FeedSection(title: "Recently watched", items: history.recent))
+                if accounts.isSignedIn {
+                    // From the YouTube account (same history and progress as everywhere else).
+                    let partly = youtubeHistory.filter { ($0.watchedPercent ?? 0) > 0 && ($0.watchedPercent ?? 0) < 97 }
+                    if !partly.isEmpty {
+                        ShelfRow(section: FeedSection(title: "Continue watching", items: partly))
+                    }
+                    if !youtubeHistory.isEmpty {
+                        ShelfRow(section: FeedSection(title: "History", items: youtubeHistory))
+                    }
+                } else {
+                    // On this iPhone — works without an account.
+                    if !history.continueWatching.isEmpty {
+                        ShelfRow(section: FeedSection(title: "Continue watching", items: history.continueWatching))
+                    }
+                    if !history.recent.isEmpty {
+                        ShelfRow(section: FeedSection(title: "Recently watched", items: history.recent))
+                    }
                 }
 
                 if accounts.isSignedIn {
@@ -34,7 +47,7 @@ struct LibraryView: View {
                     signInCard
                 }
 
-                if history.recent.isEmpty {
+                if !accounts.isSignedIn, history.recent.isEmpty {
                     Label("Videos you watch show up here, so you can pick up where you left off.",
                           systemImage: "clock.arrow.circlepath")
                         .font(.footnote)
@@ -46,7 +59,7 @@ struct LibraryView: View {
         }
         .navigationTitle("Library")
         .toolbar {
-            if !history.recent.isEmpty {
+            if !accounts.isSignedIn, !history.recent.isEmpty {
                 ToolbarItem(placement: .secondaryAction) {
                     Button("Clear watch history", systemImage: "trash", role: .destructive) { confirmClear = true }
                 }
@@ -58,15 +71,27 @@ struct LibraryView: View {
             Text("Removes Continue watching and Recently watched. Your YouTube account history isn't affected.")
         }
         .task(id: accounts.generation) {
-            guard accounts.isSignedIn, loadedGeneration != accounts.generation else { return }
-            playlists = (try? await YouTubeService.shared.libraryPlaylists()) ?? []
+            guard accounts.isSignedIn, loadedGeneration != accounts.generation else {
+                if !accounts.isSignedIn { youtubeHistory = [] }
+                return
+            }
+            youtubeHistory = []
+            async let lists = YouTubeService.shared.libraryPlaylists()
+            youtubeHistory = Self.videos(try? await YouTubeService.shared.history())
+            playlists = (try? await lists) ?? []
             loadedGeneration = accounts.generation
         }
         .refreshable {
             if accounts.isSignedIn {
-                playlists = (try? await YouTubeService.shared.libraryPlaylists()) ?? playlists
+                async let lists = YouTubeService.shared.libraryPlaylists()
+                if let page = try? await YouTubeService.shared.history() { youtubeHistory = Self.videos(page) }
+                playlists = (try? await lists) ?? playlists
             }
         }
+    }
+
+    private static func videos(_ page: FeedPage?) -> [VideoItem] {
+        (page?.items ?? []).compactMap { if case .video(let v) = $0, !v.isShort { return v }; return nil }
     }
 
     private func sectionTitle(_ text: String) -> some View {

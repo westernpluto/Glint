@@ -142,6 +142,10 @@ final class PlayerController {
         if let s = stream {
             head.append("Client: \(s.clientKey), \(s.options.count) qualities, audio \(s.audio.map { "itag \($0.itag), \($0.contentLength) bytes" } ?? "none")\(s.isLive ? ", live" : "")\(s.hlsURL != nil ? ", HLS" : "")\(s.sabr != nil ? ", SABR" : "")\(s.progressiveURL != nil ? (s.hlsURL == nil && s.sabr == nil ? ", 360p progressive" : ", 360p fallback ready") : "")")
         }
+        if let s = stream, AccountStore.shared.isSignedIn {
+            head.append("Watch sync: " + (s.tracking != nil ? "reporting to your YouTube account" : "not reporting (this stream didn't come through your account)")
+                        + ", YouTube progress received for \(WatchHistory.shared.remoteSeen) videos")
+        }
         if let s = stream, s.sabr != nil {
             // Measured download speed vs. what the playing quality needs (video + audio).
             let mbps: (Double) -> String = { String(format: "%.1f Mbps", $0 / 1_000_000) }
