@@ -96,6 +96,8 @@ final class PlayerController {
     @ObservationIgnored private var pausedAt: Date?
     /// The single variant SABR Auto is playing (nil when a quality was chosen or not SABR).
     @ObservationIgnored private var sabrAutoPick: DashFormat?
+    /// Set when the floating mini player is tapped: the watch page grows the video out of it.
+    @ObservationIgnored var expandFromMini = false
     /// SABR Auto with every quality offered and AVPlayer capped by our speed estimate.
     @ObservationIgnored private var sabrAutoABR = false
     @ObservationIgnored private var lastPeakUpdate = Date.distantPast

@@ -6,44 +6,69 @@ import SwiftUI
 struct PlayerScreen: View {
     @Environment(PlayerController.self) private var player
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.containerSize) private var container
     @State private var drag: CGFloat = 0
+    /// 1 while growing out of the floating mini player, animated to 0 on appear.
+    @State private var expanding: CGFloat = PlayerController.shared.expandFromMini ? 1 : 0
 
     var body: some View {
         let isMusic = player.current?.isMusic == true
+        let videoMini = !isMusic && !player.audioOnly
         // A short display (outer screen held sideways) goes straight to an immersive player.
-        let immersive = player.isFullscreen || (verticalSizeClass == .compact && !isMusic && !player.audioOnly)
+        let immersive = player.isFullscreen || (verticalSizeClass == .compact && videoMini)
         Group {
-            if isMusic {
-                if immersive { FullscreenPlayer(drag: $drag) } else { NowPlayingView(drag: $drag) }
-            } else {
-                // One video view for both: the watch page only reserves its slot, and the
-                // player is drawn on top — in the slot, or grown to the whole screen. Going
-                // fullscreen animates that one view's frame instead of swapping screens.
-                WatchView(drag: $drag)
-                    .overlayPreferenceValue(VideoSlotKey.self) { slot in
-                        SharedVideo(slot: slot, immersive: immersive, drag: $drag)
+            if isMusic || player.audioOnly {
+                Group {
+                    if isMusic {
+                        if immersive { FullscreenPlayer(drag: $drag) } else { NowPlayingView(drag: $drag) }
+                    } else {
+                        WatchView(drag: $drag)
+                            .overlayPreferenceValue(VideoSlotKey.self) { slot in
+                                SharedVideo(slot: slot, immersive: immersive, progress: 0, drag: $drag)
+                            }
                     }
-                    .statusBarHidden(immersive)
+                }
+                // Follows the finger like an iOS card: slides, shrinks a little and rounds its
+                // corners. The mask covers the whole screen (incl. the home-indicator strip).
+                .mask {
+                    RoundedRectangle(cornerRadius: min(max(drag, 0) / 12, 34), style: .continuous)
+                        .ignoresSafeArea()
+                }
+                .scaleEffect(1 - min(max(drag, 0) / 4000, 0.1), anchor: .top)
+                .offset(y: drag)
+            } else {
+                // Video: one view for everything. The watch page only reserves the video's slot;
+                // the player is drawn on top — in the slot, grown to the whole screen, or (while
+                // dragging down / growing back) on its way to the floating mini player's corner,
+                // as the page fades away behind it.
+                let progress = max(min(drag / Self.collapseDistance(container), 1), expanding)
+                WatchView(drag: $drag)
+                    .opacity(1 - progress)
+                    .allowsHitTesting(progress < 0.05)
+                    .overlayPreferenceValue(VideoSlotKey.self) { slot in
+                        SharedVideo(slot: slot, immersive: immersive, progress: progress, drag: $drag)
+                    }
+                    .statusBarHidden(immersive && progress < 0.5)
                     .persistentSystemOverlays(immersive ? .hidden : .automatic)
             }
         }
-        // Follows the finger like an iOS card: slides, shrinks a little and rounds its corners.
-        // The mask covers the whole screen (incl. the home-indicator strip); clipping to the
-        // safe area left the bottom strip transparent, showing the tab underneath.
-        .mask {
-            RoundedRectangle(cornerRadius: min(max(drag, 0) / 12, 34), style: .continuous)
-                .ignoresSafeArea()
-        }
-        .scaleEffect(1 - min(max(drag, 0) / 4000, 0.1), anchor: .top)
-        .offset(y: drag)
         .onChange(of: player.presentation) { _, p in if p != .expanded { drag = 0 } }
+        .onAppear {
+            guard player.expandFromMini else { return }
+            player.expandFromMini = false
+            withAnimation(.smooth(duration: 0.34)) { expanding = 0 }
+        }
     }
+
+    /// How far to drag for the video to reach the mini player.
+    static func collapseDistance(_ container: CGSize) -> CGFloat { max(container.height * 0.5, 280) }
 }
 
 /// Drag down to shrink the player into the mini player.
 struct CollapseGesture: ViewModifier {
     @Binding var drag: CGFloat
     @Environment(PlayerController.self) private var player
+    @Environment(\.containerSize) private var container
 
     func body(content: Content) -> some View {
         content.gesture(
@@ -60,10 +85,14 @@ struct CollapseGesture: ViewModifier {
                 .onEnded { v in
                     let close = v.translation.height > 110 || v.predictedEndTranslation.height > 260
                     if close {
-                        // Finish the motion first, then hand off to the mini player without a second animation.
-                        withAnimation(.smooth(duration: 0.2)) { drag = max(v.predictedEndTranslation.height, 640) }
+                        // Finish the motion first, then hand off to the mini player without a second
+                        // animation. Video: exactly into the mini player's place (progress 1).
+                        let video = player.current?.isMusic != true && !player.audioOnly
+                        let target = video ? PlayerScreen.collapseDistance(container) : max(v.predictedEndTranslation.height, 640)
+                        let duration = video ? 0.26 : 0.2
+                        withAnimation(.smooth(duration: duration)) { drag = target }
                         Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 190_000_000)
+                            try? await Task.sleep(nanoseconds: UInt64((duration - 0.01) * 1_000_000_000))
                             var t = Transaction()
                             t.disablesAnimations = true
                             withTransaction(t) {
@@ -108,24 +137,33 @@ extension View {
 struct SharedVideo: View {
     var slot: VideoSlot?
     var immersive: Bool
+    /// 0 = in place, 1 = at the floating mini player's frame.
+    var progress: CGFloat = 0
     @Binding var drag: CGFloat
     @Environment(PlayerController.self) private var player
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(AppRouter.self) private var router
+    @AppStorage(FloatingMiniPlayer.cornerKey) private var cornerRaw = FloatingMiniPlayer.Corner.bottomTrailing.rawValue
 
     var body: some View {
         GeometryReader { g in
             let full = CGRect(origin: .zero, size: g.size)
-            let rect = immersive ? full : (slot.map { g[$0.anchor] } ?? .zero)
-            let corner = immersive ? 0 : (slot?.corner ?? 0)
+            let home = immersive ? full : (slot.map { g[$0.anchor] } ?? .zero)
+            let mini = FloatingMiniPlayer.frame(corner: FloatingMiniPlayer.Corner(rawValue: cornerRaw) ?? .bottomTrailing,
+                                                in: g.size, insets: router.contentInsets)
+            let p = min(max(progress, 0), 1)
+            let rect = CGRect(x: lerp(home.minX, mini.minX, p), y: lerp(home.minY, mini.minY, p),
+                              width: lerp(home.width, mini.width, p), height: lerp(home.height, mini.height, p))
+            let corner = lerp(immersive ? 0 : (slot?.corner ?? 0), FloatingMiniPlayer.cornerRadius, p)
             ZStack(alignment: .topLeading) {
                 Color.black
-                    .opacity(immersive ? 1 : 0)
-                    .allowsHitTesting(immersive)
+                    .opacity(immersive ? 1 - p : 0)
+                    .allowsHitTesting(immersive && p < 0.05)
                 if rect.width > 1 {
-                    VideoBox(fullscreen: immersive)
+                    VideoBox(fullscreen: immersive, showsControls: p < 0.02)
                         .frame(width: rect.width, height: rect.height)
                         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-                        .overlay(alignment: .top) { if !immersive { GrabHandle() } }
+                        .shadow(color: .black.opacity(0.35 * p), radius: 14 * p, y: 6 * p)
+                        .overlay(alignment: .top) { if !immersive && p < 0.02 { GrabHandle() } }
                         .collapsesPlayer($drag)
                         .offset(x: rect.minX, y: rect.minY)
                 }
@@ -164,18 +202,24 @@ struct VideoSurfaceView: View {
 /// Video with its controls layered on top.
 struct VideoBox: View {
     var fullscreen = false
+    /// Off while the video is shrinking into the mini player.
+    var showsControls = true
     @Environment(PlayerController.self) private var player
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         ZStack {
             VideoSurfaceView()
-            PlayerOverlay(fullscreen: fullscreen) {
-                player.toggleFullscreen(from: fullscreen, rotate: horizontalSizeClass == .compact)
+            if showsControls {
+                PlayerOverlay(fullscreen: fullscreen) {
+                    player.toggleFullscreen(from: fullscreen, rotate: horizontalSizeClass == .compact)
+                }
             }
         }
     }
 }
+
+@inline(__always) func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
 
 extension PlayerController {
     /// `from` is what is on screen now (fullscreen can also be automatic on a short display).

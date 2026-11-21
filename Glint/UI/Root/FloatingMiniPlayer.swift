@@ -6,7 +6,9 @@ import SwiftUI
 struct FloatingMiniPlayer: View {
     @Environment(PlayerController.self) private var player
     @Environment(AppRouter.self) private var router
-    @AppStorage("miniPlayerCorner.v2") private var cornerRaw = Corner.bottomTrailing.rawValue
+    @AppStorage(FloatingMiniPlayer.cornerKey) private var cornerRaw = Corner.bottomTrailing.rawValue
+    static let cornerKey = "miniPlayerCorner.v2"
+    static let cornerRadius: CGFloat = 14
     @State private var drag: CGSize = .zero
     @State private var leaving: CGFloat = 0
 
@@ -20,22 +22,19 @@ struct FloatingMiniPlayer: View {
 
     var body: some View {
         GeometryReader { g in
-            let width = min(max(g.size.width * 0.44, 170), 280)
+            let width = Self.frame(corner: corner, in: g.size, insets: router.contentInsets).width
             let height = width * 9 / 16
             let home = position(for: corner, in: g, size: CGSize(width: width, height: height))
 
             video
                 .frame(width: width, height: height)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.12))
-                }
+                .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
                 .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
-                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
                 .onTapGesture(count: 2) { player.togglePlay() }
-                .onTapGesture { player.presentation = .expanded }
+                .onTapGesture { expand() }
                 .contextMenu {
-                    Button { player.presentation = .expanded } label: { Label("Open", systemImage: "arrow.up.left.and.arrow.down.right") }
+                    Button { expand() } label: { Label("Open", systemImage: "arrow.up.left.and.arrow.down.right") }
                     Button { player.togglePlay() } label: {
                         Label(player.isPlaying ? "Pause" : "Play", systemImage: player.isPlaying ? "pause.fill" : "play.fill")
                     }
@@ -50,12 +49,20 @@ struct FloatingMiniPlayer: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Mini player: \(player.current?.title ?? "")")
                 .accessibilityAddTraits(.isButton)
-                .accessibilityAction { player.presentation = .expanded }
+                .accessibilityAction { expand() }
                 .accessibilityAction(named: player.isPlaying ? "Pause" : "Play") { player.togglePlay() }
                 .accessibilityAction(named: "Close") { player.close() }
         }
         // Whole window: positions come from the bars' measured room (`contentInsets`).
         .ignoresSafeArea()
+    }
+
+    /// Grow back into the watch page from right here (the page animates from this frame).
+    private func expand() {
+        player.expandFromMini = true
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { player.presentation = .expanded }
     }
 
     private var video: some View {
@@ -75,18 +82,25 @@ struct FloatingMiniPlayer: View {
         }
     }
 
-    /// Corner centres, clear of the bars: inside the room the current tab's content has
-    /// (under the navigation bar, beside a vertical tab bar, above a bottom one).
+    /// Corner centres, clear of the bars (see `frame`).
     private func position(for corner: Corner, in g: GeometryProxy, size: CGSize) -> CGPoint {
+        let f = Self.frame(corner: corner, in: g.size, insets: router.contentInsets)
+        return CGPoint(x: f.midX, y: f.midY)
+    }
+
+    /// The mini player's frame in window coordinates: inside the room the current tab's
+    /// content has (under the navigation bar, beside a vertical tab bar, above a bottom one).
+    /// Shared with the watch page, which shrinks the video into exactly this frame.
+    static func frame(corner: Corner, in container: CGSize, insets: EdgeInsets) -> CGRect {
+        let width = min(max(container.width * 0.44, 170), 280)
+        let size = CGSize(width: width, height: width * 9 / 16)
         let inset: CGFloat = 12
-        var room = router.contentInsets
+        var room = insets
         if room.top < 20 { room.top = 100 }        // not measured yet: typical bars
         if room.bottom < 20 { room.bottom = 90 }
-        let x = corner.isLeading ? room.leading + inset + size.width / 2
-                                 : g.size.width - room.trailing - inset - size.width / 2
-        let y = corner.isTop ? room.top + inset + size.height / 2
-                             : g.size.height - room.bottom - inset - size.height / 2
-        return CGPoint(x: x, y: y)
+        let x = corner.isLeading ? room.leading + inset : container.width - room.trailing - inset - size.width
+        let y = corner.isTop ? room.top + inset : container.height - room.bottom - inset - size.height
+        return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
     private func end(_ v: DragGesture.Value, in g: GeometryProxy, size: CGSize, from home: CGPoint) {
