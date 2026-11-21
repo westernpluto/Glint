@@ -296,6 +296,10 @@ struct WatchView: View {
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.leading + $0.safeAreaInsets.trailing } action: { sideInsets = $0 }
             .onGeometryChange(for: Bool.self) { Fold.horizontal($0) != nil } action: { horizontalFold = $0 }
+            // Tall: the whole page uses the full width, side safe areas included — the iPhone
+            // Duo outer display's status column only holds anything up where the video is, so
+            // details, buttons and comments below shouldn't stop short of it.
+            .ignoresSafeArea(.container, edges: wide ? [] : .horizontal)
             .background(Color(uiColor: .systemBackground).ignoresSafeArea())
         .sheet(item: $channelSheet) { route in
             NavigationStack {
