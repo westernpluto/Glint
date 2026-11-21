@@ -103,33 +103,34 @@ struct LibraryView: View {
             .padding(.horizontal, Metrics.gutter(screen))
     }
 
+    /// A plain list, like Settings: no boxes competing with the shelves above.
     private var shortcuts: some View {
         let items: [(String, String, Route)] = [
-            ("History", "clock.arrow.circlepath", .history),
             ("Watch later", "clock", .watchLater),
             ("Liked videos", "hand.thumbsup", .liked),
             ("Liked songs", "heart", .musicLiked),
             ("Music playlists", "music.note.list", .musicPlaylists),
+            ("Full history", "clock.arrow.circlepath", .history),
         ]
-        return LazyVGrid(columns: [GridItem(.adaptive(minimum: screen == .expanded ? 220 : 150), spacing: 12)], spacing: 12) {
-            ForEach(items, id: \.0) { item in
+        return VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.offset) { i, item in
                 NavigationLink(value: item.2) {
-                    HStack(spacing: 12) {
-                        Image(systemName: item.1)
-                            .font(.headline)
-                            .foregroundStyle(.tint)
-                            .frame(width: 26)
-                        Text(item.0).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    HStack(spacing: 14) {
+                        Image(systemName: item.1).foregroundStyle(.tint).frame(width: 24)
+                        Text(item.0).foregroundStyle(.primary)
                         Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                     }
-                    .padding(14)
-                    .background(Color.cardFill, in: RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous))
+                    .font(.body)
+                    .padding(.vertical, 13)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                if i < items.count - 1 { Divider().padding(.leading, 38) }
             }
         }
         .padding(.horizontal, Metrics.gutter(screen))
+        .frame(maxWidth: 640, alignment: .leading)
     }
 }
 

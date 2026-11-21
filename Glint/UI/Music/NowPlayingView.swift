@@ -112,24 +112,16 @@ struct NowPlayingView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// Top: only the way out (and a grab area). Everything else is in the bottom action row.
+    /// Top: just the grabber — drag down (or tap it) to minimize.
     private var topBar: some View {
-        HStack {
-            Button { player.presentation = .mini } label: {
-                Image(systemName: "chevron.down")
-                    .font(.body.weight(.semibold))
-                    .frame(width: 40, height: 40)
-                    .glassEffect(.regular.interactive(), in: .circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Minimize")
-            Spacer()
-            Capsule().fill(.white.opacity(0.4)).frame(width: 36, height: 5).accessibilityHidden(true)
-            Spacer()
-            Color.clear.frame(width: 40, height: 40)
+        Button { player.presentation = .mini } label: {
+            Capsule().fill(.secondary.opacity(0.6)).frame(width: 40, height: 5)
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .contentShape(Rectangle())
         }
-        .padding(.top, 8)
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        .accessibilityLabel("Minimize")
+        .padding(.top, 4)
         .collapsesPlayer($drag)
     }
 
@@ -155,26 +147,15 @@ struct NowPlayingView: View {
         .collapsesPlayer($drag)
     }
 
-    /// One thumb-reachable row of labelled actions under the transport.
+    /// Three things under the transport: lyrics, the queue, and everything else.
     private func actionRow(showQueueButton: Bool) -> some View {
         HStack(spacing: 0) {
             if showQueueButton {
                 actionTile("Lyrics", "quote.bubble") { sheetTab = .lyrics; showQueue = true }
                 actionTile("Up next", "list.bullet") { sheetTab = .queue; showQueue = true }
             }
-            actionTile(player.audioOnly ? "Video" : "Song", player.audioOnly ? "play.rectangle" : "music.note") {
-                player.setAudioOnly(!player.audioOnly)
-            }
-            Menu { SleepTimerOptions() } label: {
-                tileLabel(player.sleepActive ? player.sleepSummary : "Sleep", "moon.zzz", on: player.sleepActive)
-            }
-            .frame(maxWidth: .infinity)
-            Group {
-                if player.audioOnly {
-                    MusicMoreMenu { tileLabel("More", "ellipsis") }
-                } else {
-                    QualityMenu { tileLabel("More", "ellipsis") }
-                }
+            PlayerOptionsMenu(music: true) {
+                tileLabel("More", "ellipsis", on: player.sleepActive || player.rate != 1)
             }
             .frame(maxWidth: .infinity)
         }
@@ -213,13 +194,6 @@ struct NowPlayingView: View {
     private func transport(showQueueButton: Bool) -> some View {
         GlassEffectContainer(spacing: 20) {
             HStack {
-                SpeedMenu {
-                    Text(player.rate == 1 ? "1×" : String(format: "%g×", player.rate))
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel("Playback speed")
                 Spacer()
                 Button { player.previous() } label: {
                     Image(systemName: "backward.fill").font(.title2)
@@ -253,8 +227,6 @@ struct NowPlayingView: View {
                 }
                 .accessibilityLabel("Next")
                 Spacer()
-                // Balances the speed control on the leading side.
-                Color.clear.frame(width: 44, height: 44)
             }
             .foregroundStyle(.primary)
             .buttonStyle(.plain)

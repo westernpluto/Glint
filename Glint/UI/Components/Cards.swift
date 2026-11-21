@@ -111,7 +111,6 @@ struct VideoMenu: View {
     @Environment(AccountStore.self) private var accounts
 
     var body: some View {
-        Button { player.play(video) } label: { Label("Play", systemImage: "play") }
         Button { player.playAudio(video) } label: { Label("Listen (audio only)", systemImage: "headphones") }
         Button { player.enqueueNext(video) } label: { Label("Play next", systemImage: "text.line.first.and.arrowtriangle.forward") }
         Button { player.enqueue(video) } label: { Label("Add to queue", systemImage: "text.line.last.and.arrowtriangle.forward") }

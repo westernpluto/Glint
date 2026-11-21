@@ -116,58 +116,47 @@ struct SpeedMenu<MenuLabel: View>: View {
     }
 }
 
-/// Music's "More" menu: actions that make sense for a song (no video resolutions).
-struct MusicMoreMenu<MenuLabel: View>: View {
+/// The one options menu for the player: every setting, grouped into labelled submenus
+/// (Quality, Audio, Captions, Speed, Sleep timer), plus the few toggles. `music` adds the
+/// song actions and offers Video / Song instead of "Audio only".
+struct PlayerOptionsMenu<MenuLabel: View>: View {
+    var music = false
     @Environment(PlayerController.self) private var player
+    @Environment(AppSettings.self) private var settings
     @ViewBuilder var label: () -> MenuLabel
 
     var body: some View {
         Menu {
-            Button { player.startRadio() } label: {
-                Label("Start radio from this song", systemImage: "dot.radiowaves.left.and.right")
+            if music {
+                Button { player.startRadio() } label: {
+                    Label("Start radio from this song", systemImage: "dot.radiowaves.left.and.right")
+                }
+                if let id = player.current?.videoId, let url = URL(string: "https://music.youtube.com/watch?v=\(id)") {
+                    ShareLink(item: url) { Label("Share song", systemImage: "square.and.arrow.up") }
+                }
+                Button { player.setAudioOnly(!player.audioOnly) } label: {
+                    Label(player.audioOnly ? "Watch the video" : "Play as song",
+                          systemImage: player.audioOnly ? "play.rectangle" : "music.note")
+                }
+                Divider()
             }
-            if let id = player.current?.videoId, let url = URL(string: "https://music.youtube.com/watch?v=\(id)") {
-                ShareLink(item: url) { Label("Share song", systemImage: "square.and.arrow.up") }
-            }
-            Picker(selection: Binding(get: { Double(player.rate) }, set: { player.setRate(Float($0)) })) {
-                ForEach(playbackSpeeds, id: \.self) { Text(speedLabel($0)).tag($0) }
-            } label: {
-                Label("Speed · " + speedLabel(Double(player.rate)), systemImage: "gauge.with.dots.needle.67percent")
-            }
-            .pickerStyle(.menu)
-            SleepTimerMenu()
-            Button { player.showsPlaybackInfo = true } label: {
-                Label("Playback info", systemImage: "info.circle")
-            }
-        } label: {
-            label()
-        }
-    }
-}
 
-/// Quality / speed / audio-only menu.
-struct QualityMenu<MenuLabel: View>: View {
-    @Environment(PlayerController.self) private var player
-    @ViewBuilder var label: () -> MenuLabel
-
-    var body: some View {
-        Menu {
-            if let s = player.stream, !s.options.isEmpty {
-                Section("Quality") {
-                    choice(title: "Auto" + (player.selectedOption == nil && !player.audioOnly
-                                            ? (player.playingResolution.map { " · \($0)" } ?? "") : ""),
-                           selected: player.selectedOption == nil && !player.audioOnly) { player.select(nil) }
+            if let s = player.stream, !s.options.isEmpty, !player.audioOnly {
+                Menu {
+                    choice("Auto" + (player.selectedOption == nil ? (player.playingResolution.map { " · \($0)" } ?? "") : ""),
+                           selected: player.selectedOption == nil) { player.select(nil) }
                     ForEach(s.options) { o in
-                        choice(title: o.label + (o.badge.map { "  \($0)" } ?? ""),
-                               subtitle: o.codec.uppercased(),
-                               selected: player.selectedOption?.id == o.id && !player.audioOnly) { player.select(o) }
+                        choice(o.label + (o.badge.map { "  \($0)" } ?? ""), subtitle: o.codec.uppercased(),
+                               selected: player.selectedOption?.id == o.id) { player.select(o) }
                     }
+                } label: {
+                    Label("Quality · " + (player.selectedOption?.label ?? "Auto"), systemImage: "slider.horizontal.3")
                 }
             }
             if let s = player.stream, s.audioTracks.count > 1 {
                 Menu {
                     ForEach(s.audioTracks) { t in
-                        choice(title: t.name, subtitle: t.isDefault ? "Original" : nil,
+                        choice(t.name, subtitle: t.isDefault ? "Original" : nil,
                                selected: s.audio?.audioTrackId == t.format.audioTrackId) { player.selectAudioTrack(t) }
                     }
                 } label: {
@@ -175,20 +164,39 @@ struct QualityMenu<MenuLabel: View>: View {
                     Label("Audio · \(current)", systemImage: "waveform")
                 }
             }
-            if player.stream?.isLive != true {
+            if !player.captionTracks.isEmpty, !player.audioOnly {
+                Menu {
+                    choice("Off", selected: player.selectedCaption == nil) { player.selectCaption(nil) }
+                    ForEach(player.captionTracks) { t in
+                        choice(t.label, selected: player.selectedCaption?.id == t.id) { player.selectCaption(t) }
+                    }
+                } label: {
+                    Label("Captions · " + (player.selectedCaption?.name ?? "Off"),
+                          systemImage: player.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill")
+                }
+            }
+            Menu {
+                Picker("Speed", selection: Binding(get: { Double(player.rate) }, set: { player.setRate(Float($0)) })) {
+                    ForEach(playbackSpeeds, id: \.self) { Text(speedLabel($0)).tag($0) }
+                }
+            } label: {
+                Label("Speed · " + speedLabel(Double(player.rate)), systemImage: "gauge.with.dots.needle.67percent")
+            }
+            SleepTimerMenu()
+
+            Divider()
+            if !music, player.stream?.isLive != true {
                 Toggle(isOn: Binding(get: { player.audioOnly }, set: { player.setAudioOnly($0) })) {
                     Label("Audio only", systemImage: "headphones")
                 }
             }
-            SleepTimerMenu()
-            Menu {
-                ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0], id: \.self) { r in
-                    choice(title: r == 1 ? "Normal" : String(format: "%g×", r), selected: abs(Double(player.rate) - r) < 0.01) {
-                        player.setRate(Float(r))
-                    }
+            if !music {
+                Toggle(isOn: Binding(get: { settings.autoplay }, set: { settings.autoplay = $0 })) {
+                    Label("Autoplay next video", systemImage: "play.square.stack")
                 }
-            } label: {
-                Label("Speed · " + (player.rate == 1 ? "Normal" : String(format: "%g×", player.rate)), systemImage: "gauge.with.dots.needle.67percent")
+            }
+            if !player.audioOnly, let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
+                Button { pip.startPictureInPicture() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
             }
             Button { player.showsPlaybackInfo = true } label: {
                 Label("Playback info", systemImage: "info.circle")
@@ -199,7 +207,7 @@ struct QualityMenu<MenuLabel: View>: View {
     }
 
     @ViewBuilder
-    private func choice(title: String, subtitle: String? = nil, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func choice(_ title: String, subtitle: String? = nil, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             if selected {
                 Label { Text(title); if let subtitle { Text(subtitle) } } icon: { Image(systemName: "checkmark") }
@@ -354,25 +362,27 @@ struct PlayerOverlay: View {
                 .allowsHitTesting(false)
 
             VStack(spacing: 0) {
-                // Top: only the way out. Everything else lives at the bottom, within thumb reach.
+                // Top: only full screen has a way out here (inline, the grab handle / swipe down
+                // already minimizes).
                 HStack {
-                    glassIcon(fullscreen ? "xmark" : "chevron.down",
-                              label: fullscreen ? "Exit full screen" : "Minimize") {
-                        if fullscreen { onToggleFullscreen() } else { player.presentation = .mini }
+                    if fullscreen {
+                        glassIcon("xmark", label: "Exit full screen") { onToggleFullscreen() }
                     }
                     Spacer()
                 }
+                .frame(height: 40)
                 .padding(.horizontal, 12)
                 .padding(.top, fullscreen ? 16 : 10)
 
                 Spacer()
 
                 if player.loadError == nil {
+                    // One control in the middle. Double-tap the sides to skip 10 s.
                     GlassEffectContainer(spacing: 24) {
                         HStack(spacing: fullscreen ? 40 : 28) {
-                            transport("backward.end.fill", size: 46, label: "Previous") { player.previous() }
-                                .opacity(player.index > 0 ? 1 : 0)
-                                .disabled(player.index == 0)
+                            let hasNext = player.index + 1 < player.queue.count
+                            Color.clear.frame(width: 40, height: 40)
+                                .opacity(hasNext ? 1 : 0)
                             Button { player.togglePlay(); scheduleHide() } label: {
                                 ZStack {
                                     if player.isLoading || player.isBuffering {
@@ -389,7 +399,10 @@ struct PlayerOverlay: View {
                             }
                             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
                             .sensoryFeedback(.impact(weight: .light), trigger: player.isPlaying)
-                            transport("forward.end.fill", size: 46, label: "Next") { player.next(); scheduleHide() }
+                            // Next only when there's a queue to go to.
+                            transport("forward.end.fill", size: 40, label: "Next") { player.next(); scheduleHide() }
+                                .opacity(hasNext ? 1 : 0)
+                                .disabled(!hasNext)
                         }
                     }
                 }
@@ -409,25 +422,14 @@ struct PlayerOverlay: View {
                                 ElapsedLabel(style: .elapsedOfTotal)
                             }
                             Spacer()
-                            QualityMenu {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "gearshape")
-                                    if let r = player.playingResolution, !player.audioOnly { Text(r) }
-                                }
-                                .frame(height: 36)
-                                .padding(.horizontal, 10)
-                                .contentShape(Rectangle())
+                            // Everything else: quality, audio, captions, speed, sleep, PiP…
+                            PlayerOptionsMenu {
+                                Image(systemName: "ellipsis")
+                                    .font(.callout.weight(.bold))
+                                    .frame(width: 38, height: 36)
+                                    .contentShape(Rectangle())
                             }
-                            .accessibilityLabel("Quality, speed and sleep timer")
-                            if !player.captionTracks.isEmpty, !player.audioOnly {
-                                barButton(player.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill",
-                                          label: player.selectedCaption == nil ? "Turn captions on" : "Turn captions off") {
-                                    player.toggleCaptions()
-                                }
-                            }
-                            if let pip = player.pip, AVPictureInPictureController.isPictureInPictureSupported() {
-                                barButton("pip.enter", label: "Picture in Picture") { pip.startPictureInPicture() }
-                            }
+                            .accessibilityLabel("Player options")
                             barButton(fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                                       label: fullscreen ? "Exit full screen" : "Full screen", action: onToggleFullscreen)
                         }

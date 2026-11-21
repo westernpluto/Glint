@@ -346,81 +346,45 @@ struct WatchDetails: View {
         }
     }
 
-    /// Every action and playback setting, visible and labelled — nothing hidden behind gestures.
+    /// The few things you do with a video, in one row. Playback settings live in the
+    /// player's ⋯ menu, so they aren't repeated here.
     private var actions: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GlassEffectContainer(spacing: 8) {
-                FlowLayout(spacing: 8) {
-                    if accounts.isSignedIn, let id = player.current?.videoId {
-                        Button {
-                            let now = !liked
-                            liked = now
-                            Task {
-                                do { try await YouTubeService.shared.rate(id, now ? .like : .none) } catch {
-                                    // Didn't go through: show the real state again.
-                                    if liked == now { liked = !now }
-                                    player.flash("Couldn't update your like")
-                                }
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                if accounts.isSignedIn, let id = player.current?.videoId {
+                    Button {
+                        let now = !liked
+                        liked = now
+                        Task {
+                            do { try await YouTubeService.shared.rate(id, now ? .like : .none) } catch {
+                                // Didn't go through: show the real state again.
+                                if liked == now { liked = !now }
+                                player.flash("Couldn't update your like")
                             }
-                        } label: {
-                            pill(player.extras?.likeCount ?? "Like", liked ? "hand.thumbsup.fill" : "hand.thumbsup", on: liked)
                         }
-                        .sensoryFeedback(.impact(weight: .light), trigger: liked)
-                        Button {
-                            Task {
-                                do {
-                                    try await YouTubeService.shared.saveToWatchLater(id)
-                                    player.flash("Saved to Watch later")
-                                } catch {
-                                    player.flash("Couldn't save to Watch later")
-                                }
+                    } label: {
+                        pill(player.extras?.likeCount ?? "Like", liked ? "hand.thumbsup.fill" : "hand.thumbsup", on: liked)
+                    }
+                    .sensoryFeedback(.impact(weight: .light), trigger: liked)
+                    Button {
+                        Task {
+                            do {
+                                try await YouTubeService.shared.saveToWatchLater(id)
+                                player.flash("Saved to Watch later")
+                            } catch {
+                                player.flash("Couldn't save to Watch later")
                             }
-                        } label: { pill("Watch later", "clock") }
-                    } else if let likes = player.extras?.likeCount {
-                        pill(likes, "hand.thumbsup", interactive: false)
-                    }
-                    if let id = player.current?.videoId {
-                        ShareVideoMenu(videoId: id) { pill("Share", "square.and.arrow.up") }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-
-            Text("Playback").font(.caption.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
-            GlassEffectContainer(spacing: 8) {
-                FlowLayout(spacing: 8) {
-                    QualityMenu {
-                        pill("Quality · " + (player.audioOnly ? "Audio" : (player.selectedOption?.label ?? "Auto")),
-                             "slider.horizontal.3")
-                    }
-                    SpeedMenu {
-                        pill("Speed · " + (player.rate == 1 ? "1×" : String(format: "%g×", player.rate)),
-                             "gauge.with.dots.needle.67percent", on: player.rate != 1)
-                    }
-                    Button { player.setAudioOnly(!player.audioOnly) } label: {
-                        pill("Audio only", "headphones", on: player.audioOnly)
-                    }
-                    if !player.captionTracks.isEmpty {
-                        Menu {
-                            Button { player.selectCaption(nil) } label: {
-                                if player.selectedCaption == nil { Label("Off", systemImage: "checkmark") } else { Text("Off") }
-                            }
-                            ForEach(player.captionTracks) { t in
-                                Button { player.selectCaption(t) } label: {
-                                    if player.selectedCaption?.id == t.id { Label(t.label, systemImage: "checkmark") } else { Text(t.label) }
-                                }
-                            }
-                        } label: {
-                            pill(player.selectedCaption.map { "Captions · \($0.name)" } ?? "Captions", "captions.bubble",
-                                 on: player.selectedCaption != nil)
                         }
-                    }
-                    Menu { SleepTimerOptions() } label: {
-                        pill(player.sleepActive ? "Sleep · \(player.sleepSummary)" : "Sleep timer", "moon.zzz", on: player.sleepActive)
-                    }
+                    } label: { pill("Save", "bookmark") }
+                } else if let likes = player.extras?.likeCount {
+                    pill(likes, "hand.thumbsup", interactive: false)
                 }
-                .buttonStyle(.plain)
+                if let id = player.current?.videoId {
+                    ShareVideoMenu(videoId: id) { pill("Share", "square.and.arrow.up") }
+                }
+                Spacer(minLength: 0)
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -485,11 +449,9 @@ struct UpNextList: View {
                     Text("Up next").font(.title3.weight(.bold))
                 }
                 Spacer()
-                Toggle(isOn: Binding(get: { settings.autoplay }, set: { settings.autoplay = $0 })) {
-                    Text("Autoplay").font(.subheadline).foregroundStyle(.secondary)
+                if !settings.autoplay {
+                    Text("Autoplay off").font(.footnote).foregroundStyle(.secondary)
                 }
-                .toggleStyle(.switch)
-                .fixedSize()
             }
 
             if let related = player.extras?.related, !related.isEmpty {
