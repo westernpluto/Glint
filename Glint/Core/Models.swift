@@ -12,6 +12,16 @@ struct VideoItem: Identifiable, Hashable, Codable {
     var published: String?
     var isLive: Bool = false
     var isShort: Bool = false
+    /// Signed in: how much of it YouTube says you've watched (0–100), from the resume bar.
+    var watchedPercent: Double? = nil
+
+    /// `duration` ("1:02:03") in seconds.
+    var durationSeconds: Double? {
+        guard let d = duration, d.contains(":") else { return nil }
+        let parts = d.split(separator: ":").compactMap { Double($0) }
+        guard !parts.isEmpty else { return nil }
+        return parts.reduce(0) { $0 * 60 + $1 }
+    }
 
     var subtitle: String {
         [channelName, views, published].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")

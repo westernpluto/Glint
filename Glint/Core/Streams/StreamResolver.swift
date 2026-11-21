@@ -61,6 +61,8 @@ struct ResolvedStream {
     var progressiveUserAgent: String?
     /// Set when the formats are fetched over SABR (their `url`s are placeholders).
     var sabr: SabrSession?
+    /// Signed-in web response: where to report watch progress (`YouTubeWatchSync`).
+    var tracking: PlaybackTracking?
 
     /// Video formats suitable for "Auto" (one per resolution, decodable).
     var autoFormats: [DashFormat] {
@@ -217,6 +219,8 @@ final class StreamResolver: @unchecked Sendable {
                 continue
             }
             stream.clientKey = client.key
+            // Only a request that carried the account reports to it.
+            if client.isWebPlayback, signedIn { stream.tracking = PlaybackTracking(json) }
             if stream.sabr != nil {
                 if let p = progressive, let url = p.progressiveURL {
                     stream.progressiveURL = url

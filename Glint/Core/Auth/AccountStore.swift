@@ -97,6 +97,7 @@ final class AccountStore {
 
     func remove(_ id: UUID) {
         accounts.removeAll { $0.id == id }
+        WatchHistory.shared.deleteProfile(id)
         if activeID == id { activeID = accounts.first?.id }
         persist()
         apply()
@@ -114,6 +115,7 @@ final class AccountStore {
 
     private func apply() {
         InnerTube.shared.auth = active?.auth
+        WatchHistory.shared.useProfile(active?.id)
         generation += 1
     }
 

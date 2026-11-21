@@ -177,6 +177,7 @@ final class PlayerController {
         StreamResolver.shared.trace = { line in
             Task { @MainActor in PlayerController.shared.note(line) }
         }
+        YouTubeWatchSync.shared.trace = { [weak self] line in self?.note(line) }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 4), queue: .main) { [weak self] t in
             MainActor.assumeIsolated { self?.tick(t.seconds) }
         }
@@ -416,6 +417,7 @@ final class PlayerController {
                 let s = try await StreamResolver.shared.resolve(videoId: videoId, hints: hints)
                 guard !Task.isCancelled, self.current?.videoId == videoId else { return }
                 self.stream = s
+                YouTubeWatchSync.shared.begin(videoId: videoId, tracking: s.tracking, at: hints.startAt)
                 self.details = s.details
                 if !isMusic, !s.isLive {
                     WatchHistory.shared.record(VideoItem(
@@ -739,6 +741,7 @@ final class PlayerController {
                 let s = try await StreamResolver.shared.resolve(videoId: id, hints: hints)
                 guard let self, !Task.isCancelled, self.current?.videoId == id else { return }
                 self.stream = s
+                YouTubeWatchSync.shared.begin(videoId: id, tracking: s.tracking, at: time)
                 self.resolvedAt = Date()
                 if let keepID { self.selectedOption = s.options.first { $0.id == keepID } ?? self.preferredOption(in: s) }
                 self.installItem(at: time)
@@ -752,7 +755,10 @@ final class PlayerController {
     }
 
     /// Remembers where long videos were left so they resume there next time.
-    private func savePosition() {
+    private func savePosition(force: Bool = false) {
+        if activeVideoId != nil, stream?.isLive != true, duration > 0 {
+            YouTubeWatchSync.shared.report(position: currentTime, length: duration, playing: isPlaying, force: force)
+        }
         guard let id = activeVideoId, !activeIsMusic, stream?.isLive != true, duration > 0 else { return }
         WatchHistory.shared.save(currentTime, duration: duration, for: id)
         lastPositionSave = Date()
@@ -975,6 +981,7 @@ final class PlayerController {
 
     private func handleEnd() {
         guard let c = current else { return }
+        savePosition(force: true)   // last watchtime report: watched to the end
         if sleepAtEnd {
             sleepAtEnd = false
             flash("Sleep timer: paused")

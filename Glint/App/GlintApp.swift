@@ -9,6 +9,10 @@ struct GlintApp: App {
 
     init() {
         URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 512 << 20)
+        // Signed-in resume bars on feeds update the account's watch progress.
+        Parser.onResumeProgress = { items in
+            Task { @MainActor in WatchHistory.shared.mergeRemote(items) }
+        }
         Task {
             await InnerTube.shared.warmUp()
             try? await Task.sleep(for: .seconds(2))   // let the first screen load first

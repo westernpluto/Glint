@@ -17,6 +17,9 @@ enum Parser {
 
     // MARK: Feeds
 
+    /// Receives YouTube's resume progress found while parsing (set at launch).
+    nonisolated(unsafe) static var onResumeProgress: (@Sendable ([(id: String, percent: Double, duration: Double)]) -> Void)?
+
     static func feed(_ root: JSON, hideShorts: Bool) -> FeedPage {
         var items: [FeedItem] = []
         var seen = Set<String>()
@@ -59,6 +62,12 @@ enum Parser {
                 return true
             }
         }
+        // Signed-in resume bars feed the local watch progress.
+        let progress = items.compactMap { item -> (id: String, percent: Double, duration: Double)? in
+            guard case .video(let v) = item, let p = v.watchedPercent, let d = v.durationSeconds else { return nil }
+            return (v.id, p, d)
+        }
+        if !progress.isEmpty { onResumeProgress?(progress) }
         return FeedPage(items: items, continuation: continuation)
     }
 
@@ -71,7 +80,9 @@ enum Parser {
 
         var duration = r["lengthText"].text
         var live = false
+        var watched: Double?
         for o in r["thumbnailOverlays"].array {
+            if let p = o.at("thumbnailOverlayResumePlaybackRenderer.percentDurationWatched").double { watched = p }
             let ts = o["thumbnailOverlayTimeStatusRenderer"]
             if ts.isNull { continue }
             if ts["style"].string == "LIVE" { live = true }
@@ -94,7 +105,8 @@ enum Parser {
             views: r["shortViewCountText"].text ?? r["viewCountText"].text ?? r["videoInfo"].text,
             published: r["publishedTimeText"].text,
             isLive: live,
-            isShort: isShort
+            isShort: isShort,
+            watchedPercent: watched
         )
     }
 
@@ -156,7 +168,8 @@ enum Parser {
             duration: live ? nil : badge,
             views: secondRow.first,
             published: secondRow.count > 1 ? secondRow[1] : nil,
-            isLive: live
+            isLive: live,
+            watchedPercent: r["contentImage"].first("thumbnailOverlayProgressBarViewModel")?["startPercent"].double
         ))
     }
 
