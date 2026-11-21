@@ -170,7 +170,7 @@ struct NowPlayingView: View {
 
     private func tileLabel(_ title: String, _ icon: String, on: Bool = false) -> some View {
         VStack(spacing: 5) {
-            Image(systemName: icon).font(.title3)
+            Image(systemName: icon).font(.title3).frame(height: 26)   // same height for every glyph
             Text(title).font(.caption2.weight(.semibold)).lineLimit(1)
         }
         .foregroundStyle(on ? Color.accentColor : Color.secondary)
