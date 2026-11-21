@@ -154,6 +154,16 @@ enum ScreenshotDriver {
             let id = d.string(forKey: "GlintVideo") ?? "aqz-KE-bpKQ"
             PlayerController.shared.play(VideoItem(id: id, title: "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film",
                                                    channelName: "Blender"))
+        case "watchtest":
+            // A real picture on the watch page (YouTube can't play on the build machines).
+            let url = URL(string: d.string(forKey: "GlintStream")
+                          ?? "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!
+            PlayerController.shared.debugPlayStream(url, title: "Apple HLS sample stream (16:9)")
+        case "lyrics":
+            // Now Playing with the sing-along lyrics open ("Shape of You" has timed lyrics).
+            let id = d.string(forKey: "GlintVideo") ?? "JGwWNGJdvx8"
+            PlayerController.shared.playMusic(MusicItem(kind: .song, title: "Shape of You", subtitle: "Ed Sheeran", videoId: id))
+            PlayerController.shared.presentation = .expanded
         case "nowplaying":
             let id = d.string(forKey: "GlintVideo") ?? "FGBhQbmPwH8"
             PlayerController.shared.playMusic(MusicItem(kind: .song, title: "One More Time", subtitle: "Daft Punk", videoId: id))

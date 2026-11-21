@@ -63,7 +63,7 @@ run_scene() {  # scene [orientation]
 }
 
 # The iPhone Duo outer display ("primary").
-for scene in home watch nowplaying mini library search; do
+for scene in home watch watchtest nowplaying lyrics mini library search; do
   run_scene "$scene"
   shot primary "outer-$scene"
 done
@@ -88,7 +88,7 @@ if true; then
     t 30 xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 >/dev/null 2>&1 || true
     t 30 xcrun simctl ui "$UDID" appearance light >/dev/null 2>&1 || true
     if install_app; then
-      for scene in home watch nowplaying music; do
+      for scene in home watch watchtest nowplaying lyrics music; do
         run_scene "$scene" portrait
         # The iPad has one display; no --display needed.
         for attempt in 1 2; do

@@ -839,6 +839,27 @@ final class PlayerController {
         installItem(at: currentTime)
     }
 
+    #if DEBUG
+    /// Design screenshots only: plays a non-YouTube HLS stream (the simulators on the build
+    /// machines can't play YouTube) so layouts can be checked with a real picture.
+    func debugPlayStream(_ url: URL, title: String) {
+        let item = QueueItem(video: VideoItem(id: "debugstream", title: title, channelName: "Apple sample stream"))
+        queue = [item]
+        index = 0
+        activeVideoId = item.videoId
+        activeIsMusic = false
+        audioOnly = false
+        let details = VideoDetails(id: item.videoId, title: title, channelName: "Apple sample stream", channelId: nil,
+                                   description: "HLS test stream used for design screenshots.", viewCount: nil,
+                                   lengthSeconds: nil, isLive: false, thumbnail: nil, publishDate: nil)
+        stream = ResolvedStream(details: details, options: [], hlsURL: url, manifest: nil, audio: nil,
+                                streamUserAgent: ClientProfile.web.userAgent, isLive: false)
+        self.details = details
+        presentation = .expanded
+        installItem(at: 0)
+    }
+    #endif
+
     func setAudioOnly(_ on: Bool) {
         guard on != audioOnly else { return }
         audioOnly = on

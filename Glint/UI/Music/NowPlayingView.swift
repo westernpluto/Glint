@@ -9,7 +9,11 @@ struct NowPlayingView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showQueue = false
     /// Lyrics in place of the artwork.
+    #if DEBUG
+    @State private var showLyrics = UserDefaults.standard.string(forKey: "GlintScene") == "lyrics"
+    #else
     @State private var showLyrics = false
+    #endif
     @State private var palette: [Color]?
 
     var body: some View {
