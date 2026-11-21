@@ -48,7 +48,9 @@ struct PlayerScreen: View {
                     .overlayPreferenceValue(VideoSlotKey.self) { slot in
                         SharedVideo(slot: slot, immersive: immersive, progress: progress, drag: $drag)
                     }
-                    .statusBarHidden(immersive && progress < 0.5)
+                    // No time / battery over the video while the player is up (they come back as
+                    // it shrinks into the mini player).
+                    .statusBarHidden(progress < 0.5)
                     .persistentSystemOverlays(immersive ? .hidden : .automatic)
             }
         }
