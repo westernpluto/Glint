@@ -119,6 +119,9 @@ extension View {
 struct VideoSlot {
     var anchor: Anchor<CGRect>
     var corner: CGFloat
+    /// Spans the window's full width (tall layout): the video runs under side bars, like the
+    /// iPhone Duo outer display's status column, instead of stopping at the safe area.
+    var fullWidth = false
 }
 
 struct VideoSlotKey: PreferenceKey {
@@ -128,8 +131,8 @@ struct VideoSlotKey: PreferenceKey {
 
 extension View {
     /// Reserves the video's place in the watch page (the player itself is drawn by `SharedVideo`).
-    func videoSlot(corner: CGFloat) -> some View {
-        anchorPreference(key: VideoSlotKey.self, value: .bounds) { VideoSlot(anchor: $0, corner: corner) }
+    func videoSlot(corner: CGFloat, fullWidth: Bool = false) -> some View {
+        anchorPreference(key: VideoSlotKey.self, value: .bounds) { VideoSlot(anchor: $0, corner: corner, fullWidth: fullWidth) }
     }
 }
 
@@ -147,7 +150,11 @@ struct SharedVideo: View {
     var body: some View {
         GeometryReader { g in
             let full = CGRect(origin: .zero, size: g.size)
-            let home = immersive ? full : (slot.map { g[$0.anchor] } ?? .zero)
+            let slotRect = slot.map { g[$0.anchor] } ?? .zero
+            // Full-width slot: from the window's left edge to its right edge (the slot itself
+            // stops at the safe area; its height is already sized for the full width).
+            let home = immersive ? full
+                : (slot?.fullWidth == true ? CGRect(x: 0, y: slotRect.minY, width: g.size.width, height: slotRect.height) : slotRect)
             let mini = FloatingMiniPlayer.frame(corner: FloatingMiniPlayer.Corner(rawValue: cornerRaw) ?? .bottomTrailing,
                                                 in: g.size, insets: router.contentInsets)
             let p = min(max(progress, 0), 1)
@@ -352,8 +359,7 @@ struct WatchView: View {
             Color.black
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Out to the screen's sides, under a side status column.
-                .ignoresSafeArea(edges: .horizontal)
-                .videoSlot(corner: 0)
+                .videoSlot(corner: 0, fullWidth: true)
                 // Extend the black stage under the status bar / vertical bar instead of leaving a strip.
                 .background { Color.black.ignoresSafeArea() }
         }
