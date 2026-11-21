@@ -274,6 +274,9 @@ struct WatchView: View {
     @Environment(\.screenClass) private var screen
     @State private var channelSheet: Route?
     @State private var size: CGSize = .zero
+    /// Side safe areas (the iPhone Duo outer display keeps its status bar in a column on the
+    /// right): the tall layout's video extends under them instead of leaving a black strip.
+    @State private var sideInsets: CGFloat = 0
     @State private var horizontalFold = false
 
     var body: some View {
@@ -282,6 +285,7 @@ struct WatchView: View {
         // Read geometry without wrapping the ArrangementView in another layout container.
         arrangement(wide: wide, size: size)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.leading + $0.safeAreaInsets.trailing } action: { sideInsets = $0 }
             .onGeometryChange(for: Bool.self) { Fold.horizontal($0) != nil } action: { horizontalFold = $0 }
             .background(Color(uiColor: .systemBackground).ignoresSafeArea())
         .sheet(item: $channelSheet) { route in
@@ -304,7 +308,8 @@ struct WatchView: View {
     @ViewBuilder
     private func arrangement(wide: Bool, size: CGSize) -> some View {
         // Tall: the video gets exactly its 16:9 height (capped at half the display).
-        let videoShare = min(0.5, max(0.22, size.width * 9 / 16 / max(size.height, 1)))
+        // Full-width 16:9, side safe areas included (the video runs under them).
+        let videoShare = min(0.5, max(0.22, (size.width + sideInsets) * 9 / 16 / max(size.height, 1)))
         if #available(iOS 27.1, *) {
             ArrangementView {
                 primary(wide: wide)
@@ -344,6 +349,8 @@ struct WatchView: View {
         } else {
             Color.black
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Out to the screen's sides, under a side status column.
+                .ignoresSafeArea(edges: .horizontal)
                 .videoSlot(corner: 0)
                 // Extend the black stage under the status bar / vertical bar instead of leaving a strip.
                 .background { Color.black.ignoresSafeArea() }
