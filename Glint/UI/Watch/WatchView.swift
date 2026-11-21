@@ -53,8 +53,9 @@ struct CollapseGesture: ViewModifier {
                 .onChanged { v in
                     let dy = v.translation.height
                     guard abs(dy) > abs(v.translation.width) else { return }
-                    // Follow the finger downwards; resist a little upwards (rubber band).
-                    drag = dy > 0 ? dy : -sqrt(-dy) * 2
+                    // Follow the finger downwards only: moving up from the top would uncover the
+                    // screen below the player.
+                    drag = max(dy, 0)
                 }
                 .onEnded { v in
                     let close = v.translation.height > 110 || v.predictedEndTranslation.height > 260
