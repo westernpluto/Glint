@@ -482,24 +482,18 @@ struct LyricsView: View {
 
     private enum LineState { case past, current, future }
 
+    /// Where the next line starts (a line's own end can include a held note or a gap).
+    private func nextStart(after line: YouTubeService.Lyrics.Line) -> Double? {
+        lyrics?.lines.first { $0.start > line.start + 0.01 }?.start
+    }
+
     @ViewBuilder
     private func lineView(_ line: YouTubeService.Lyrics.Line, state: LineState, time: Double) -> some View {
         let font: Font = compact ? .title3.weight(.bold) : .title.weight(.bold)
         switch state {
         case .current:
-            // Words light up as they're sung: the line's time spread over its words by length.
-            let words = line.text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-            let total = max(words.reduce(0) { $0 + $1.count + 1 }, 1)
-            let progress = min(max((time - line.start) / max(line.end - line.start, 0.1), 0), 1) * Double(total)
-            var used = 0
-            let text = words.reduce(Text("")) { acc, w in
-                let lit = Double(used) < progress
-                used += w.count + 1
-                return acc + Text(w + " ").foregroundStyle(lit ? Color.white : Color.white.opacity(0.42))
-            }
-            text.font(font)
+            SingingLine(line: line, nextStart: nextStart(after: line), font: font)
                 .scaleEffect(1.03, anchor: .leading)
-                .animation(.easeOut(duration: 0.2), value: state == .current)
         case .past:
             Text(line.text).font(font).foregroundStyle(.white.opacity(0.32))
         case .future:
@@ -517,5 +511,87 @@ struct LyricsView: View {
         lyrics = result
         loadedFor = id
         loading = false
+    }
+}
+
+/// The line being sung: a soft-edged highlight slides across its words, read from the
+/// player's exact position every frame. YouTube times whole lines, so each word's share of
+/// the line is estimated from its syllables (sung words follow syllables more than letters).
+struct SingingLine: View {
+    var line: YouTubeService.Lyrics.Line
+    var nextStart: Double?
+    var font: Font
+    @Environment(PlayerController.self) private var player
+
+    private struct Word { var text: String; var from: Double; var to: Double }
+
+    private var words: [Word] {
+        let parts = line.text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let weights = parts.map { Double(Self.syllables($0)) + 0.35 }
+        let total = max(weights.reduce(0, +), 0.001)
+        // Sung part of the line: up to the next line, but not into a long gap after it.
+        let end = min(line.end, nextStart ?? line.end)
+        let length = max(end - line.start, 0.2)
+        var t = line.start
+        return zip(parts, weights).map { text, w in
+            let d = length * w / total
+            defer { t += d }
+            return Word(text: text, from: t, to: t + d)
+        }
+    }
+
+    var body: some View {
+        let words = self.words
+        TimelineView(.animation(minimumInterval: 1 / 60)) { _ in
+            let raw = player.player.currentTime().seconds
+            let now = (raw.isFinite ? raw : player.currentTime) + 0.06   // a hair early reads as on time
+            FlowLayout(spacing: 7) {
+                ForEach(Array(words.enumerated()), id: \.offset) { _, w in
+                    LyricWord(text: w.text, fill: min(max((now - w.from) / max(w.to - w.from, 0.05), 0), 1), font: font)
+                }
+            }
+        }
+    }
+
+    /// Vowel groups, a decent stand-in for syllables (at least one).
+    static func syllables(_ word: String) -> Int {
+        var count = 0, inVowel = false
+        for c in word.lowercased() {
+            let v = "aeiouyàáâäèéêëìíîïòóôöùúûü".contains(c)
+            if v && !inVowel { count += 1 }
+            inVowel = v
+        }
+        if word.lowercased().hasSuffix("e"), count > 1 { count -= 1 }   // silent e
+        return max(count, 1)
+    }
+}
+
+/// One word: dim, with the bright copy revealed left to right up to `fill`, soft leading edge.
+struct LyricWord: View {
+    var text: String
+    var fill: Double
+    var font: Font
+
+    var body: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(.white.opacity(0.4))
+            .overlay {
+                if fill > 0 {
+                    Text(text)
+                        .font(font)
+                        .foregroundStyle(.white)
+                        .mask {
+                            let edge = 0.18
+                            let head = fill * (1 + edge)          // so 1 means fully lit
+                            LinearGradient(stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black, location: min(max(head - edge, 0), 1)),
+                                .init(color: .clear, location: min(max(head, 0.0001), 1)),
+                            ], startPoint: .leading, endPoint: .trailing)
+                        }
+                }
+            }
+            .fixedSize()
     }
 }
