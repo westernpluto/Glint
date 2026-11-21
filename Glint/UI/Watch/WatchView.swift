@@ -13,12 +13,18 @@ struct PlayerScreen: View {
         // A short display (outer screen held sideways) goes straight to an immersive player.
         let immersive = player.isFullscreen || (verticalSizeClass == .compact && !isMusic && !player.audioOnly)
         Group {
-            if immersive {
-                FullscreenPlayer(drag: $drag)
-            } else if isMusic {
-                NowPlayingView(drag: $drag)
+            if isMusic {
+                if immersive { FullscreenPlayer(drag: $drag) } else { NowPlayingView(drag: $drag) }
             } else {
+                // One video view for both: the watch page only reserves its slot, and the
+                // player is drawn on top — in the slot, or grown to the whole screen. Going
+                // fullscreen animates that one view's frame instead of swapping screens.
                 WatchView(drag: $drag)
+                    .overlayPreferenceValue(VideoSlotKey.self) { slot in
+                        SharedVideo(slot: slot, immersive: immersive, drag: $drag)
+                    }
+                    .statusBarHidden(immersive)
+                    .persistentSystemOverlays(immersive ? .hidden : .automatic)
             }
         }
         // Follows the finger like an iOS card: slides, shrinks a little and rounds its corners.
@@ -73,6 +79,58 @@ struct CollapseGesture: ViewModifier {
 
 extension View {
     func collapsesPlayer(_ drag: Binding<CGFloat>) -> some View { modifier(CollapseGesture(drag: drag)) }
+}
+
+// MARK: Shared video (inline ↔ fullscreen)
+
+/// Where the watch page wants the video, and with what corner radius.
+struct VideoSlot {
+    var anchor: Anchor<CGRect>
+    var corner: CGFloat
+}
+
+struct VideoSlotKey: PreferenceKey {
+    static let defaultValue: VideoSlot? = nil
+    static func reduce(value: inout VideoSlot?, nextValue: () -> VideoSlot?) { value = nextValue() ?? value }
+}
+
+extension View {
+    /// Reserves the video's place in the watch page (the player itself is drawn by `SharedVideo`).
+    func videoSlot(corner: CGFloat) -> some View {
+        anchorPreference(key: VideoSlotKey.self, value: .bounds) { VideoSlot(anchor: $0, corner: corner) }
+    }
+}
+
+/// The single video view: in the watch page's slot, or the whole screen when immersive.
+struct SharedVideo: View {
+    var slot: VideoSlot?
+    var immersive: Bool
+    @Binding var drag: CGFloat
+    @Environment(PlayerController.self) private var player
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    var body: some View {
+        GeometryReader { g in
+            let full = CGRect(origin: .zero, size: g.size)
+            let rect = immersive ? full : (slot.map { g[$0.anchor] } ?? .zero)
+            let corner = immersive ? 0 : (slot?.corner ?? 0)
+            ZStack(alignment: .topLeading) {
+                Color.black
+                    .opacity(immersive ? 1 : 0)
+                    .allowsHitTesting(immersive)
+                if rect.width > 1 {
+                    VideoBox(fullscreen: immersive)
+                        .frame(width: rect.width, height: rect.height)
+                        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+                        .overlay(alignment: .top) { if !immersive { GrabHandle() } }
+                        .collapsesPlayer($drag)
+                        .offset(x: rect.minX, y: rect.minY)
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .animation(.smooth(duration: 0.32), value: immersive)
+    }
 }
 
 // MARK: Video
@@ -228,22 +286,20 @@ struct WatchView: View {
         if wide {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    VideoBox()
+                    Color.black
                         .aspectRatio(16 / 9, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .overlay(alignment: .top) { GrabHandle() }
-                        .collapsesPlayer($drag)
+                        .videoSlot(corner: 22)
                     WatchDetails(channelSheet: $channelSheet)
                 }
                 .padding(20)
             }
         } else {
-            VideoBox()
+            Color.black
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .videoSlot(corner: 0)
                 // Extend the black stage under the status bar / vertical bar instead of leaving a strip.
                 .background { Color.black.ignoresSafeArea() }
-                .overlay(alignment: .top) { GrabHandle() }
-                .collapsesPlayer($drag)
         }
     }
 
