@@ -12,6 +12,9 @@ struct RootView: View {
 
     var body: some View {
         let section = Binding(get: { router.section }, set: { router.section = $0 })
+        // Videos minimize to a floating picture; music / audio only to the bar.
+        let floatingMini = player.presentation == .mini && player.current != nil
+            && player.current?.isMusic != true && !player.audioOnly
         GeometryReader { geo in
             ZStack {
                 TabView(selection: section) {
@@ -33,8 +36,14 @@ struct RootView: View {
                 }
                 .tabViewStyle(.sidebarAdaptable)
                 .tabBarMinimizeBehavior(.onScrollDown)
-                .tabViewBottomAccessory(isEnabled: player.presentation == .mini && player.current != nil) {
+                .tabViewBottomAccessory(isEnabled: player.presentation == .mini && player.current != nil && !floatingMini) {
                     MiniPlayerAccessory()
+                }
+
+                if floatingMini {
+                    FloatingMiniPlayer()
+                        .transition(.scale(scale: 0.6, anchor: .bottom).combined(with: .opacity))
+                        .zIndex(1)
                 }
 
                 if player.presentation == .expanded, player.current != nil {
