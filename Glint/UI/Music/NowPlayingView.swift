@@ -8,7 +8,8 @@ struct NowPlayingView: View {
     @Environment(PlayerController.self) private var player
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showQueue = false
-    @State private var sheetTab: MusicSidePanel.Tab = .queue
+    /// Lyrics in place of the artwork.
+    @State private var showLyrics = false
     @State private var palette: [Color]?
 
     var body: some View {
@@ -23,8 +24,8 @@ struct NowPlayingView: View {
             }
             .sheet(isPresented: $showQueue) {
                 NavigationStack {
-                    MusicSidePanel(tab: sheetTab)
-                        .navigationTitle(sheetTab == .queue ? "Up next" : "Lyrics")
+                    QueueList(showsHeader: false)
+                        .navigationTitle("Up next")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .topBarPinnedTrailing) {
@@ -127,6 +128,18 @@ struct NowPlayingView: View {
 
     @ViewBuilder
     private var artwork: some View {
+        if showLyrics {
+            // Scrolls on its own, so no drag-to-minimize here (the grabber still does it).
+            LyricsView(compact: true)
+                .frame(maxWidth: 560, maxHeight: .infinity)
+                .transition(.opacity)
+        } else {
+            artworkImage
+        }
+    }
+
+    @ViewBuilder
+    private var artworkImage: some View {
         Group {
             if player.audioOnly {
                 Color.clear
@@ -151,8 +164,10 @@ struct NowPlayingView: View {
     private func actionRow(showQueueButton: Bool) -> some View {
         HStack(spacing: 0) {
             if showQueueButton {
-                actionTile("Lyrics", "quote.bubble") { sheetTab = .lyrics; showQueue = true }
-                actionTile("Up next", "list.bullet") { sheetTab = .queue; showQueue = true }
+                actionTile("Lyrics", showLyrics ? "quote.bubble.fill" : "quote.bubble", on: showLyrics) {
+                    withAnimation(.smooth(duration: 0.3)) { showLyrics.toggle() }
+                }
+                actionTile("Up next", "list.bullet") { showQueue = true }
             }
             PlayerOptionsMenu(music: true) {
                 tileLabel("More", "ellipsis", on: player.sleepActive || player.rate != 1)
@@ -384,47 +399,118 @@ struct MusicSidePanel: View {
     }
 }
 
+/// Lyrics you can sing along to: with timings, the current line is large and bright, its
+/// words light up as they're sung (spread over the line's time by length), the view keeps
+/// it in place as the song moves, and tapping a line jumps there. Without timings, the
+/// plain text.
 struct LyricsView: View {
+    var compact = false
     @Environment(PlayerController.self) private var player
-    @State private var text: String?
-    @State private var source: String?
+    @State private var lyrics: YouTubeService.Lyrics?
     @State private var loadedFor: String?
     @State private var loading = false
+    /// After a manual scroll, follow the song again only after a few seconds.
+    @State private var userScrolledAt = Date.distantPast
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                if loading {
-                    ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
-                } else if let text {
-                    Text(text)
-                        .font(.title3.weight(.semibold))
-                        .lineSpacing(8)
-                        .textSelection(.enabled)
-                    if let source {
-                        Text(source).font(.caption).foregroundStyle(.secondary)
+        Group {
+            if loading {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let l = lyrics, !l.lines.isEmpty {
+                synced(l)
+            } else if let l = lyrics, let text = l.text {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(text)
+                            .font(.title3.weight(.semibold))
+                            .lineSpacing(8)
+                            .textSelection(.enabled)
+                        if let source = l.source { Text(source).font(.caption).foregroundStyle(.secondary) }
                     }
-                } else {
-                    ContentUnavailableView("No lyrics for this song", systemImage: "quote.bubble")
-                        .padding(.top, 30)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
                 }
+            } else {
+                ContentUnavailableView("No lyrics for this song", systemImage: "quote.bubble")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(20)
         }
         .task(id: player.current?.videoId) { await load() }
+    }
+
+    private func synced(_ l: YouTubeService.Lyrics) -> some View {
+        let t = player.currentTime
+        let current = l.lines.lastIndex { $0.start <= t + 0.15 } ?? -1
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: compact ? 14 : 20) {
+                    Color.clear.frame(height: compact ? 20 : 60)
+                    ForEach(Array(l.lines.enumerated()), id: \.offset) { i, line in
+                        Button { player.seek(to: line.start) } label: {
+                            lineView(line, state: i < current ? .past : i == current ? .current : .future, time: t)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .id(i)
+                    }
+                    if let source = l.source {
+                        Text(source).font(.caption).foregroundStyle(.secondary).padding(.top, 12)
+                    }
+                    Color.clear.frame(height: compact ? 80 : 240)
+                }
+                .padding(.horizontal, compact ? 4 : 24)
+            }
+            .scrollIndicators(.hidden)
+            .simultaneousGesture(DragGesture().onChanged { _ in userScrolledAt = Date() })
+            .onChange(of: current) { _, i in
+                guard i >= 0, Date().timeIntervalSince(userScrolledAt) > 3 else { return }
+                withAnimation(.smooth(duration: 0.45)) { proxy.scrollTo(i, anchor: UnitPoint(x: 0.5, y: 0.3)) }
+            }
+            .onAppear { if current >= 0 { proxy.scrollTo(current, anchor: UnitPoint(x: 0.5, y: 0.3)) } }
+        }
+        // Soft fade at the edges, like a music app's lyrics.
+        .mask {
+            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.08),
+                                   .init(color: .black, location: 0.85), .init(color: .clear, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+        }
+    }
+
+    private enum LineState { case past, current, future }
+
+    @ViewBuilder
+    private func lineView(_ line: YouTubeService.Lyrics.Line, state: LineState, time: Double) -> some View {
+        let font: Font = compact ? .title3.weight(.bold) : .title.weight(.bold)
+        switch state {
+        case .current:
+            // Words light up as they're sung: the line's time spread over its words by length.
+            let words = line.text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            let total = max(words.reduce(0) { $0 + $1.count + 1 }, 1)
+            let progress = min(max((time - line.start) / max(line.end - line.start, 0.1), 0), 1) * Double(total)
+            var used = 0
+            let text = words.reduce(Text("")) { acc, w in
+                let lit = Double(used) < progress
+                used += w.count + 1
+                return acc + Text(w + " ").foregroundStyle(lit ? Color.white : Color.white.opacity(0.42))
+            }
+            text.font(font)
+                .scaleEffect(1.03, anchor: .leading)
+                .animation(.easeOut(duration: 0.2), value: state == .current)
+        case .past:
+            Text(line.text).font(font).foregroundStyle(.white.opacity(0.32))
+        case .future:
+            Text(line.text).font(font).foregroundStyle(.white.opacity(0.5))
+        }
     }
 
     private func load() async {
         guard let id = player.current?.videoId, id != loadedFor else { return }
         loading = true
-        text = nil
-        source = nil
+        lyrics = nil
         let result = await YouTubeService.shared.lyrics(videoId: id)
         // Cancelled (panel closed, song changed): don't remember a failed lookup as "no lyrics".
         guard !Task.isCancelled, player.current?.videoId == id else { return }
-        text = result?.text
-        source = result?.source
+        lyrics = result
         loadedFor = id
         loading = false
     }

@@ -182,8 +182,10 @@ struct VideoSurfaceView: View {
 
     var body: some View {
         ZStack {
-            Color.black
-            PlayerSurface(primary: true)
+            Color.black.ignoresSafeArea()
+            // The picture fills the whole box, also where the box runs under a side status
+            // column (it was laid out inside the safe area: pushed left, black on the right).
+            PlayerSurface(primary: true).ignoresSafeArea()
             if !player.audioOnly { CaptionOverlay() }
             if player.audioOnly, let t = player.current?.thumbnail {
                 RemoteImage(url: t, contentMode: .fit)

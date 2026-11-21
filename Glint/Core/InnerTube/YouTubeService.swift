@@ -397,17 +397,44 @@ final class YouTubeService: @unchecked Sendable {
         return try await musicBrowse("FEmusic_liked_playlists")
     }
 
-    /// Song lyrics (plain text) and their credit line, when YouTube Music has them.
-    func lyrics(videoId: String) async -> (text: String, source: String?)? {
+    struct Lyrics: Sendable {
+        struct Line: Sendable, Hashable { var text: String; var start: Double; var end: Double }
+        /// Timed lines (seconds), when YouTube Music has synced lyrics for the song.
+        var lines: [Line]
+        /// Plain text otherwise.
+        var text: String?
+        var source: String?
+    }
+
+    /// Song lyrics: synced lines when YouTube Music has them (its Android client returns line
+    /// timings), else plain text, with the credit line.
+    func lyrics(videoId: String) async -> Lyrics? {
         guard let next = try? await tube.call("next", client: .webRemix, body: ["videoId": videoId, "isAudioOnly": true]),
               let id = next.findAll("tabRenderer")
                 .compactMap({ $0.at("endpoint.browseEndpoint.browseId").string })
-                .first(where: { $0.hasPrefix("MPLY") }),
-              let page = try? await tube.call("browse", client: .webRemix, body: ["browseId": id]),
+                .first(where: { $0.hasPrefix("MPLY") })
+        else { return nil }
+
+        if let page = try? await tube.call("browse", client: .androidMusic, body: ["browseId": id], authenticated: false),
+           let model = page.first("timedLyricsModel") {
+            let data = model["lyricsData"]
+            let lines = data["timedLyricsData"].array.compactMap { l -> Lyrics.Line? in
+                guard let text = l["lyricLine"].string,
+                      let s = l.at("cueRange.startTimeMilliseconds").double,
+                      let e = l.at("cueRange.endTimeMilliseconds").double else { return nil }
+                return Lyrics.Line(text: text, start: s / 1000, end: e / 1000)
+            }
+            let source = data["sourceMessage"].text
+            if !lines.isEmpty { return Lyrics(lines: lines, text: nil, source: source) }
+            let plain = data["timedLyricsData"].array.compactMap { $0["lyricLine"].string }.joined(separator: "\n")
+            if !plain.isEmpty { return Lyrics(lines: [], text: plain, source: source) }
+        }
+
+        guard let page = try? await tube.call("browse", client: .webRemix, body: ["browseId": id]),
               let shelf = page.first("musicDescriptionShelfRenderer"),
               let text = shelf["description"].text, !text.isEmpty
         else { return nil }
-        return (text, shelf["footer"].text)
+        return Lyrics(lines: [], text: text, source: shelf["footer"].text)
     }
 
     /// Radio / album / playlist queue for a track.

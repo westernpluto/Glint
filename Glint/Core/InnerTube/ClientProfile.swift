@@ -48,6 +48,17 @@ struct ClientProfile {
         extraContext: ["platform": "DESKTOP"]
     )
 
+    /// YouTube Music's Android app: the only one whose lyrics come with line timings
+    /// (`timedLyricsModel`), as ytmusicapi uses for synced lyrics.
+    static let androidMusic = ClientProfile(
+        clientName: "ANDROID_MUSIC",
+        clientVersion: "8.47.54",
+        clientId: 21,
+        host: "music.youtube.com",
+        userAgent: "com.google.android.apps.youtube.music/8.47.54 (Linux; U; Android 11) gzip",
+        extraContext: ["androidSdkVersion": 30, "osName": "Android", "osVersion": "11"]
+    )
+
     // Playback. YouTube limits clients that need a proof-of-origin token to the first part
     // of each stream (playback stops partway in), so several identities are kept and the
     // resolver checks each stream reaches its end before using it.
