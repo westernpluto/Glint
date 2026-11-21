@@ -72,6 +72,9 @@ struct RootView: View {
 final class AppRouter {
     static let shared = AppRouter()
     var section: AppSection = .home
+    /// Room the bars take around the current tab's content (nav bar, tab bar — at the bottom,
+    /// or the vertical bar on the side), measured from inside it; keeps floating views clear.
+    var contentInsets = EdgeInsets()
     var searchScope: SearchScope {
         didSet { UserDefaults.standard.set(searchScope.rawValue, forKey: "searchScope") }
     }
@@ -91,6 +94,9 @@ private struct SectionStack: View {
             content
                 .withRoutes()
                 .toolbar { AccountToolbarItem(showSettings: $showSettings) }
+        }
+        .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: { insets in
+            if AppRouter.shared.section == section { AppRouter.shared.contentInsets = insets }
         }
     }
 

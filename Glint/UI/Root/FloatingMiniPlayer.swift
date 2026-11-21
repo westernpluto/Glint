@@ -5,7 +5,8 @@ import SwiftUI
 /// another corner, fling it off the side to stop. Long-press for the same actions.
 struct FloatingMiniPlayer: View {
     @Environment(PlayerController.self) private var player
-    @AppStorage("miniPlayerCorner") private var cornerRaw = Corner.bottomLeading.rawValue
+    @Environment(AppRouter.self) private var router
+    @AppStorage("miniPlayerCorner.v2") private var cornerRaw = Corner.bottomTrailing.rawValue
     @State private var drag: CGSize = .zero
     @State private var leaving: CGFloat = 0
 
@@ -15,7 +16,7 @@ struct FloatingMiniPlayer: View {
         var isTop: Bool { self == .topLeading || self == .topTrailing }
     }
 
-    private var corner: Corner { Corner(rawValue: cornerRaw) ?? .bottomLeading }
+    private var corner: Corner { Corner(rawValue: cornerRaw) ?? .bottomTrailing }
 
     var body: some View {
         GeometryReader { g in
@@ -53,6 +54,8 @@ struct FloatingMiniPlayer: View {
                 .accessibilityAction(named: player.isPlaying ? "Pause" : "Play") { player.togglePlay() }
                 .accessibilityAction(named: "Close") { player.close() }
         }
+        // Whole window: positions come from the bars' measured room (`contentInsets`).
+        .ignoresSafeArea()
     }
 
     private var video: some View {
@@ -72,14 +75,17 @@ struct FloatingMiniPlayer: View {
         }
     }
 
-    /// Corner centres, clear of the bars: top under the navigation title, bottom above the tab bar.
+    /// Corner centres, clear of the bars: inside the room the current tab's content has
+    /// (under the navigation bar, beside a vertical tab bar, above a bottom one).
     private func position(for corner: Corner, in g: GeometryProxy, size: CGSize) -> CGPoint {
         let inset: CGFloat = 12
-        let safe = g.safeAreaInsets
-        let x = corner.isLeading ? safe.leading + inset + size.width / 2
-                                 : g.size.width - safe.trailing - inset - size.width / 2
-        let y = corner.isTop ? safe.top + 64 + size.height / 2
-                             : g.size.height - safe.bottom - 70 - size.height / 2
+        var room = router.contentInsets
+        if room.top < 20 { room.top = 100 }        // not measured yet: typical bars
+        if room.bottom < 20 { room.bottom = 90 }
+        let x = corner.isLeading ? room.leading + inset + size.width / 2
+                                 : g.size.width - room.trailing - inset - size.width / 2
+        let y = corner.isTop ? room.top + inset + size.height / 2
+                             : g.size.height - room.bottom - inset - size.height / 2
         return CGPoint(x: x, y: y)
     }
 
