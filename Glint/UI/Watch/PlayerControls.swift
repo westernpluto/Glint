@@ -164,6 +164,17 @@ struct QualityMenu<MenuLabel: View>: View {
                     }
                 }
             }
+            if let s = player.stream, s.audioTracks.count > 1 {
+                Menu {
+                    ForEach(s.audioTracks) { t in
+                        choice(title: t.name, subtitle: t.isDefault ? "Original" : nil,
+                               selected: s.audio?.audioTrackId == t.format.audioTrackId) { player.selectAudioTrack(t) }
+                    }
+                } label: {
+                    let current = s.audioTracks.first { $0.format.audioTrackId == s.audio?.audioTrackId }?.name ?? "Default"
+                    Label("Audio · \(current)", systemImage: "waveform")
+                }
+            }
             if player.stream?.isLive != true {
                 Toggle(isOn: Binding(get: { player.audioOnly }, set: { player.setAudioOnly($0) })) {
                     Label("Audio only", systemImage: "headphones")

@@ -278,6 +278,7 @@ actor SabrSession {
             abr.int(39, elapsed)                        // since last action
             abr.int(40, video == nil ? 1 : 0)           // enabled tracks: audio only / both
             abr.bool(71, true)                          // host fallback
+            abr.string(69, audio.audioTrackId)          // audio language track
         }
         for f in withInit { body.message(2) { Self.formatId(f, &$0) } }
         // What we already hold from this position on, so the server skips it.

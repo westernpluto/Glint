@@ -387,7 +387,7 @@ final class PlayerController {
 
     private func start() {
         guard let item = current else { return }
-        savePosition()
+        savePosition(force: true)
         activeVideoId = item.videoId
         activeIsMusic = item.isMusic
         prefetchedNext = false
@@ -728,7 +728,7 @@ final class PlayerController {
     func pause() {
         pausedAt = Date()
         player.pause()
-        savePosition()
+        savePosition(force: true)
     }
 
     /// Re-resolves the current video (fresh URLs) and continues at `time` with the same quality.
@@ -824,6 +824,19 @@ final class PlayerController {
         installItem(at: currentTime)
     }
 
+    /// Switch the audio language (dubbed / original tracks), keeping position and quality.
+    func selectAudioTrack(_ track: AudioTrackOption) {
+        guard var s = stream, s.audio?.audioTrackId != track.format.audioTrackId else { return }
+        s.audio = track.format
+        if let old = s.sabr {
+            // A SABR session streams one audio format: a new one for this track.
+            s.sabr = SabrSession(config: old.config, audio: track.format, videos: old.videos)
+        }
+        stream = s
+        note("Audio track: \(track.name)")
+        installItem(at: currentTime)
+    }
+
     func setAudioOnly(_ on: Bool) {
         guard on != audioOnly else { return }
         audioOnly = on
@@ -831,7 +844,7 @@ final class PlayerController {
     }
 
     func close() {
-        savePosition()
+        savePosition(force: true)
         activeVideoId = nil
         refreshTask?.cancel()
         loadTask?.cancel()
@@ -1019,7 +1032,7 @@ final class PlayerController {
     func detach(_ layer: AVPlayerLayer) { layers.remove(layer) }
 
     private func enteredBackground() {
-        savePosition()
+        savePosition(force: true)
         // Leave the layer alone while Picture in Picture is running or about to start automatically.
         let pipStarting = pip.map { $0.isPictureInPictureActive || ($0.canStartPictureInPictureAutomaticallyFromInline && $0.isPictureInPicturePossible && isPlaying) } ?? false
         guard current != nil, !isPiPActive, !pipStarting else { return }

@@ -23,6 +23,11 @@ struct DashFormat: Hashable {
     /// Identify the format in SABR requests.
     var lastModified: UInt64?
     var xtags: String?
+    /// Multi-language audio: which track this is ("en.4" …), its name, and whether it's the
+    /// video's default (normally the original language).
+    var audioTrackId: String?
+    var audioTrackName: String?
+    var audioIsDefault = false
 
     /// `placeholderURL`: for SABR formats, which have no link of their own.
     init?(_ f: JSON, placeholderURL: URL? = nil) {
@@ -54,6 +59,9 @@ struct DashFormat: Hashable {
                 .first { $0.name == "clen" }?.value.flatMap { Int($0) } ?? 0
         self.lastModified = f["lastModified"].string.flatMap { UInt64($0) }
         self.xtags = f["xtags"].string
+        self.audioTrackId = f.at("audioTrack.id").string
+        self.audioTrackName = f.at("audioTrack.displayName").string
+        self.audioIsDefault = f.at("audioTrack.audioIsDefault").bool ?? false
         if f["isDrc"].bool == true { return nil }  // skip dynamic-range-compressed duplicates
     }
 

@@ -39,6 +39,14 @@ struct StreamOption: Identifiable, Hashable {
     }
 }
 
+/// One audio language of a multi-language video.
+struct AudioTrackOption: Identifiable, Hashable {
+    var id: String
+    var name: String
+    var isDefault: Bool
+    var format: DashFormat
+}
+
 struct ResolvedStream {
     var details: VideoDetails
     var options: [StreamOption]      // best first
@@ -63,6 +71,8 @@ struct ResolvedStream {
     var sabr: SabrSession?
     /// Signed-in web response: where to report watch progress (`YouTubeWatchSync`).
     var tracking: PlaybackTracking?
+    /// More than one entry when the video has several audio languages (dubs).
+    var audioTracks: [AudioTrackOption] = []
 
     /// Video formats suitable for "Auto" (one per resolution, decodable).
     var autoFormats: [DashFormat] {
@@ -299,8 +309,8 @@ final class StreamResolver: @unchecked Sendable {
               let configText = json.at("playerConfig.mediaCommonConfig.mediaUstreamerRequestConfig.videoPlaybackUstreamerConfig").string,
               let ustreamer = Self.base64URLData(configText) else { return nil }
         let formats = sd["adaptiveFormats"].array.compactMap { DashFormat($0, placeholderURL: url) }
-        guard let audio = formats.filter({ $0.isAudio && $0.codecs.hasPrefix("mp4a") }).max(by: { $0.bitrate < $1.bitrate })
-        else { return nil }
+        let (defaultAudio, tracks) = Self.audioChoices(formats)
+        guard let audio = defaultAudio else { return nil }
         let videos = formats.filter { !$0.isAudio && codecSupported($0.codecs) }
         var best: [String: StreamOption] = [:]
         for v in videos {
@@ -333,8 +343,27 @@ final class StreamResolver: @unchecked Sendable {
                                     audio: audio, streamUserAgent: client.userAgent, isLive: false,
                                     captions: Captions.tracks(json))
         stream.sabr = session
+        stream.audioTracks = tracks
         stream.progressiveURL = Self.progressiveURL(json)   // fallback if SABR breaks mid-play
         return stream
+    }
+
+    /// AAC audio: the best stream of each language track, the video's default track first
+    /// (normally the original language; picking by bitrate alone could land on a dub).
+    static func audioChoices(_ formats: [DashFormat]) -> (DashFormat?, [AudioTrackOption]) {
+        let aac = formats.filter { $0.isAudio && $0.codecs.hasPrefix("mp4a") }
+        var best: [String: DashFormat] = [:]
+        for f in aac {
+            let key = f.audioTrackId ?? ""
+            if let cur = best[key], cur.bitrate >= f.bitrate { continue }
+            best[key] = f
+        }
+        let tracks = best.map { key, f in
+            AudioTrackOption(id: key, name: f.audioTrackName ?? (key.isEmpty ? "Default" : key),
+                             isDefault: f.audioIsDefault, format: f)
+        }.sorted { a, b in a.isDefault != b.isDefault ? a.isDefault : a.name < b.name }
+        let chosen = tracks.first { $0.isDefault }?.format ?? aac.max { $0.bitrate < $1.bitrate }
+        return (chosen, tracks.count > 1 ? tracks : [])
     }
 
     private static func base64URLData(_ s: String) -> Data? {
@@ -450,8 +479,7 @@ final class StreamResolver: @unchecked Sendable {
             }
         }
 
-        let audio = formats.filter { $0.isAudio && $0.codecs.hasPrefix("mp4a") }
-            .max { $0.bitrate < $1.bitrate }
+        let (audio, tracks) = Self.audioChoices(formats)
         let videos = formats.filter { !$0.isAudio && codecSupported($0.codecs) }
         guard audio != nil || !videos.isEmpty else {
             // Only the muxed 360p file has a link: play that (full length, video + audio).
@@ -470,9 +498,11 @@ final class StreamResolver: @unchecked Sendable {
             best[key] = o
         }
         let options = best.values.sorted(by: Self.order)
-        return ResolvedStream(details: details, options: options, hlsURL: nil, manifest: nil,
-                              audio: audio, streamUserAgent: client.userAgent, isLive: details.isLive,
-                              captions: Captions.tracks(json))
+        var stream = ResolvedStream(details: details, options: options, hlsURL: nil, manifest: nil,
+                                    audio: audio, streamUserAgent: client.userAgent, isLive: details.isLive,
+                                    captions: Captions.tracks(json))
+        stream.audioTracks = tracks
+        return stream
     }
 
     /// AVC up to 1080p (hardware decode everywhere, light on battery); AV1 above.
