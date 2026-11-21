@@ -47,7 +47,9 @@ struct CollapseGesture: ViewModifier {
 
     func body(content: Content) -> some View {
         content.gesture(
-            DragGesture(minimumDistance: 12)
+            // Measured on the screen, not on the player: the player moves with the finger, so
+            // local coordinates fed its own movement back into the drag and made it wobble.
+            DragGesture(minimumDistance: 12, coordinateSpace: .global)
                 .onChanged { v in
                     let dy = v.translation.height
                     guard abs(dy) > abs(v.translation.width) else { return }
@@ -70,7 +72,7 @@ struct CollapseGesture: ViewModifier {
                             }
                         }
                     } else {
-                        withAnimation(.interactiveSpring(response: 0.35, dampingFraction: 0.8)) { drag = 0 }
+                        withAnimation(.smooth(duration: 0.3)) { drag = 0 }   // settle back, no overshoot
                     }
                 }
         )
