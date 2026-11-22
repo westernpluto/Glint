@@ -59,8 +59,10 @@ final class NowPlaying {
         cc.changeRepeatModeCommand.currentRepeatType = repeatType
 
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: c.details?.title ?? item.title,
-            MPMediaItemPropertyArtist: item.subtitle ?? c.details?.channelName ?? "",
+            // Songs: the song's own title and just the artist ("Artist • 19M views" → "Artist").
+            MPMediaItemPropertyTitle: item.isMusic ? item.title : (c.details?.title ?? item.title),
+            MPMediaItemPropertyArtist: item.isMusic ? Self.artist(item.subtitle) ?? c.details?.channelName ?? ""
+                                                    : item.subtitle ?? c.details?.channelName ?? "",
             MPNowPlayingInfoPropertyElapsedPlaybackTime: c.currentTime,
             MPMediaItemPropertyPlaybackDuration: c.duration,
             MPNowPlayingInfoPropertyPlaybackRate: c.isPlaying ? Double(c.rate) : 0.0,
@@ -71,7 +73,30 @@ final class NowPlaying {
         ]
         if let artwork, artworkURL == item.thumbnail { info[MPMediaItemPropertyArtwork] = artwork }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        loadArtwork(item.thumbnail)
+        loadArtwork(item.thumbnail, square: item.isMusic)
+    }
+
+    /// The artist part of a music subtitle ("Song • Artist • Album", "Artist • 19M views").
+    private static func artist(_ subtitle: String?) -> String? {
+        guard let parts = subtitle?.components(separatedBy: " • ").map({ $0.trimmingCharacters(in: .whitespaces) }) else { return nil }
+        let useful = parts.filter { p in
+            let l = p.lowercased()
+            return !p.isEmpty && !["song", "video", "single", "ep", "album"].contains(l)
+                && !l.contains("view") && !l.contains("play") && p.rangeOfCharacter(from: .letters) != nil
+        }
+        return useful.first
+    }
+
+    /// A song's picture as a square: a 16:9 video thumbnail is cut to its centre, where an
+    /// uploaded track's cover sits between black bars (Now Playing in the app does the same).
+    nonisolated private static func squared(_ image: UIImage) -> UIImage {
+        let w = image.size.width, h = image.size.height
+        guard w > h * 1.05, let cg = image.cgImage else { return image }
+        let scale = CGFloat(cg.width) / w
+        let side = h * scale
+        let rect = CGRect(x: (CGFloat(cg.width) - side) / 2, y: 0, width: side, height: side)
+        guard let cropped = cg.cropping(to: rect) else { return image }
+        return UIImage(cgImage: cropped, scale: image.scale, orientation: image.imageOrientation)
     }
 
     /// "album cover (lh3…)" / "video thumbnail (i.ytimg.com/vi/…/hqdefault.jpg)" for the log.
@@ -86,7 +111,7 @@ final class NowPlaying {
         MPMediaItemArtwork(boundsSize: image.size) { _ in image }
     }
 
-    private func loadArtwork(_ url: URL?) {
+    private func loadArtwork(_ url: URL?, square: Bool) {
         guard let url, url != artworkURL else { return }
         artworkURL = url
         artwork = nil
@@ -101,9 +126,10 @@ final class NowPlaying {
                 return
             }
             guard self.artworkURL == url else { return }
-            self.artwork = Self.makeArtwork(image)
+            let shown = square ? Self.squared(image) : image
+            self.artwork = Self.makeArtwork(shown)
             self.update()
-            self.controller?.note("Lock screen artwork: \(Self.describe(url)), \(Int(image.size.width))×\(Int(image.size.height))")
+            self.controller?.note("Lock screen artwork: \(Self.describe(url)), \(Int(shown.size.width))×\(Int(shown.size.height))")
         }
     }
 }
