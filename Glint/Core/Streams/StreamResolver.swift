@@ -96,7 +96,7 @@ final class StreamResolver: @unchecked Sendable {
     /// only their real apps can make, so YouTube may cut their streams short; `reachability`
     /// catches that. (ANDROID_VR 1.65.10 is gone: every format it gets has been refused
     /// since August 2026.)
-    var clients: [ClientProfile] = [.tvSamsung, .visionOS, .mweb, .androidVR, .androidVR("1.60.19"), .ios, .android]
+    var clients: [ClientProfile] = [.visionOS, .tvSamsung, .mweb, .androidVR, .androidVR("1.60.19"), .ios, .android]
 
     /// Clients whose streams recently failed during playback, and when. They are tried last.
     private var penalized: [String: Date] = [:]
@@ -190,9 +190,9 @@ final class StreamResolver: @unchecked Sendable {
     func resolve(videoId: String, hints: Hints = Hints()) async throws -> ResolvedStream {
         if let hit = cached(videoId) { return hit }
         var stream = try await resolveFresh(videoId: videoId, hints: hints)
-        // Streaming without the account (whatever client it came from): a signed-in request
-        // just for the watch-history links.
-        if stream.tracking == nil, tube.isSignedIn, anonymousStreams, !stream.isLive {
+        // A stream that didn't come through the account (VISIONOS, account-free mode): a
+        // signed-in request just for the watch-history links.
+        if stream.tracking == nil, tube.isSignedIn, !stream.isLive {
             stream.tracking = await accountTracking(videoId)
         }
         if !stream.isLive { store(stream, for: videoId) }
@@ -213,8 +213,11 @@ final class StreamResolver: @unchecked Sendable {
         if signedIn {
             // Signed in, the clients that take cookies carry the account (yt-dlp's choice):
             // the TV client (direct links up to 4K), MWEB, then Safari WEB for its HLS manifest.
+            // VISIONOS stays first though: direct 4K links without the account (history
+            // comes from a separate signed-in request), the others back it up.
+            let vision = order.filter { $0.clientName == "VISIONOS" }
             let web = order.filter(\.isWebPlayback) + [.webSafari]
-            order = web + order.filter { !$0.isWebPlayback }
+            order = vision + web + order.filter { !$0.isWebPlayback && $0.clientName != "VISIONOS" }
         }
         for client in order {
             var webPlayer: JSChallengeSolver.Player?
