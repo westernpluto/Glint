@@ -115,13 +115,21 @@ final class StreamResolver: @unchecked Sendable {
     var anonymousStreams: Bool { cacheLock.withLock { _anonymousStreams } }
     func useAnonymousStreams(because reason: String = "Stream protection refuses the account's token") {
         let changed: Bool = cacheLock.withLock {
+            _refusals += 1
             defer { _anonymousStreams = true }
             if !_anonymousStreams { cache = [:] }   // links resolved with the account
             return !_anonymousStreams
         }
         if changed { UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.anonymousKey) }
-        if changed { trace?("\(reason): streaming without the account (history still syncs)") }
+        trace?("\(reason): streaming without the account (history still syncs)")
     }
+    /// Page tokens didn't satisfy stream protection: don't try the page again this app session.
+    private var _pageOff = false
+    func stopUsingPage() { cacheLock.withLock { _pageOff = true } }
+    private var pageOff: Bool { cacheLock.withLock { _pageOff } }
+    /// How many refusals so far (to tell whether one happened during a resolution).
+    private var _refusals = 0
+    private var refusals: Int { cacheLock.withLock { _refusals } }
     private let penaltyLifetime: TimeInterval = 60 * 60
 
     /// Called when a stream stopped working mid-playback: that client goes to the back of
@@ -199,14 +207,26 @@ final class StreamResolver: @unchecked Sendable {
         return stream
     }
 
-    private func resolveFresh(videoId: String, hints: Hints, isRetry: Bool = false) async throws -> ResolvedStream {
+    private func resolveFresh(videoId: String, hints: Hints, isRetry: Bool = false, skipPage: Bool = false) async throws -> ResolvedStream {
         var lastReason: String?
         var limited: ResolvedStream?
         var progressive: ResolvedStream?
         var refusals = 0, botChecks = 0
         var answeredWithoutLinks = false
         let accountSignedIn = tube.isSignedIn
-        let anonymous = accountSignedIn && anonymousStreams
+        let refusalsBefore = refusals
+        // The signed-in page's session (tokens minted inside youtube.com with the account).
+        // When it works the account's streams get a try even in account-free mode.
+        let usePage = accountSignedIn && !skipPage && !pageOff
+        let page = usePage ? await AccountPoTokenProvider.shared.currentSession() : nil
+        if usePage {
+            if let page {
+                trace?("Signed-in page: tokens from youtube.com with your account (account id \(page.dataSyncId == nil ? "missing" : "found"))")
+            } else if let e = await AccountPoTokenProvider.shared.lastError {
+                trace?("Signed-in page unavailable (\(e))")
+            }
+        }
+        let anonymous = accountSignedIn && anonymousStreams && page == nil
         // Whether the stream requests carry the account.
         let signedIn = accountSignedIn && !anonymous
         var order = orderedClients
@@ -218,22 +238,13 @@ final class StreamResolver: @unchecked Sendable {
             let vision = order.filter { $0.clientName == "VISIONOS" }
             let web = order.filter(\.isWebPlayback) + [.webSafari]
             let rest = order.filter { !$0.isWebPlayback && $0.clientName != "VISIONOS" }
-            if await AccountPoTokenProvider.shared.currentSession() != nil {
+            if page != nil {
                 // Tokens from the signed-in page: give the account's SABR stream the first try
                 // (if stream protection still holds it, Glint switches to VISIONOS at once).
                 let mweb = web.filter { $0.clientName == "MWEB" }
                 order = mweb + vision + web.filter { $0.clientName != "MWEB" } + rest
             } else {
                 order = vision + web + rest
-            }
-        }
-        // The signed-in page's session (tokens minted inside youtube.com with the account).
-        let page = signedIn ? await AccountPoTokenProvider.shared.currentSession() : nil
-        if signedIn {
-            if let page {
-                trace?("Signed-in page: tokens from youtube.com with your account (account id \(page.dataSyncId == nil ? "missing" : "found"))")
-            } else if let e = await AccountPoTokenProvider.shared.lastError {
-                trace?("Signed-in page unavailable (\(e))")
             }
         }
         for client in order {
@@ -285,9 +296,9 @@ final class StreamResolver: @unchecked Sendable {
             let built = await build(json, client: client, hints: hints)
             // Stream protection just refused the account's token (build still hands back the
             // 360p file): start over without the account.
-            if signedIn, anonymousStreams {
+            if signedIn, refusals > refusalsBefore {
                 do {
-                    return try await resolveFresh(videoId: videoId, hints: hints, isRetry: isRetry)
+                    return try await resolveFresh(videoId: videoId, hints: hints, isRetry: isRetry, skipPage: true)
                 } catch {
                     // Without the account it doesn't play at all (bot check, sign-in only…):
                     // back to the account's streams.
@@ -362,7 +373,7 @@ final class StreamResolver: @unchecked Sendable {
                 tube.visitorData = nil
                 await tube.warmUp()
                 await PoTokenProvider.shared.reset()
-                return try await resolveFresh(videoId: videoId, hints: hints, isRetry: true)
+                return try await resolveFresh(videoId: videoId, hints: hints, isRetry: true, skipPage: skipPage)
             }
             if answeredWithoutLinks {
                 throw InnerTubeError.unplayable("YouTube let your account through but sent no stream Glint can play for this video (only its own streaming format). Try again later.")
@@ -432,7 +443,8 @@ final class StreamResolver: @unchecked Sendable {
                 try await session.prepare(video: video, atMs: max(0, hints.startAt) * 1000)
                 // Signed in and stream protection is already waiting on the token: it would play
                 // the free first batch and then stop. Switch before playback starts.
-                if tube.isSignedIn, !anonymousStreams, await session.protectionPending {
+                if tube.isSignedIn, await session.protectionPending {
+                    stopUsingPage()
                     useAnonymousStreams(because: "Stream protection is holding the account's SABR stream")
                     return nil
                 }
@@ -445,7 +457,7 @@ final class StreamResolver: @unchecked Sendable {
                     trace?("\(client.key): SABR refused the stream token; trying the video-bound one")
                     continue
                 }
-                if refused, tube.isSignedIn, !anonymousStreams { useAnonymousStreams() }
+                if refused, tube.isSignedIn { stopUsingPage(); useAnonymousStreams() }
                 trace?("\(client.key): SABR failed (\(error.localizedDescription))")
                 return nil
             }

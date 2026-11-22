@@ -721,8 +721,9 @@ final class PlayerController {
         let now = Date()
         // Signed in, stream protection refused the account's token (it plays the first part,
         // then stops): carry on from here with streams fetched without the account.
-        if text.contains("stream protection"), InnerTube.shared.isSignedIn, !StreamResolver.shared.anonymousStreams,
+        if text.contains("stream protection"), InnerTube.shared.isSignedIn,
            now.timeIntervalSince(lastSabrRescue) > 20 {
+            StreamResolver.shared.stopUsingPage()
             StreamResolver.shared.useAnonymousStreams()
             lastSabrRescue = now
             sabrFailureTimes = []
@@ -732,8 +733,9 @@ final class PlayerController {
         sabrFailureTimes = sabrFailureTimes.filter { now.timeIntervalSince($0) < 20 } + [now]
         // Signed in, segments that SABR never delivers (seen with songs): the streams fetched
         // without the account are direct links on this network, so switch to them.
-        if text.contains("wasn't delivered"), InnerTube.shared.isSignedIn, !StreamResolver.shared.anonymousStreams,
+        if text.contains("wasn't delivered"), InnerTube.shared.isSignedIn,
            now.timeIntervalSince(lastSabrRescue) > 20 {
+            StreamResolver.shared.stopUsingPage()
             StreamResolver.shared.useAnonymousStreams(because: "SABR isn't delivering this stream")
             lastSabrRescue = now
             sabrFailureTimes = []
