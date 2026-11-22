@@ -50,6 +50,20 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
                 Task { await self.syncCookiesBack(); self.teardown() }
             }
         }
+        // Back in front: rebuild it right away so the next video doesn't wait for it.
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.prewarm() }
+            }
+        }
+    }
+
+    /// Builds the page and mints the account-bound stream token ahead of the first video.
+    func prewarm() async {
+        guard let s = await currentSession() else { return }
+        if let id = s.dataSyncId { _ = await token(for: id) }
     }
 
     /// Copies the page's YouTube / Google cookies into the app's sign-in.

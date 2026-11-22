@@ -183,10 +183,13 @@ final class StreamResolver: @unchecked Sendable {
     func prewarm() async {
         if tube.visitorData == nil { await tube.warmUp() }
         async let solver: Void = JSChallengeSolver.shared.prewarm(session: tube.session)
+        // Signed in: the signed-in page and its stream token, ready before the first video.
+        async let page: Void = AccountPoTokenProvider.shared.prewarm()
         if let vd = tube.visitorData {
             _ = try? await PoTokenProvider.shared.token(for: PoTokenProvider.contentBinding(visitorData: vd), visitorData: vd)
         }
         await solver
+        await page
     }
 
     struct Hints: Sendable {
@@ -261,7 +264,8 @@ final class StreamResolver: @unchecked Sendable {
                 // what YouTube looks at before asking "are you a bot?"); minted while the player
                 // script loads.
                 let visitorData = tube.visitorData
-                let wantsToken = client.needsPoToken
+                // The watch-page path makes its own token inside the page: no separate one.
+                let wantsToken = client.needsPoToken && !client.fromWatchPage
                 async let token = Self.optionalVideoToken(wantsToken ? videoId : nil, visitorData: visitorData)
                 do { webPlayer = try await JSChallengeSolver.shared.player(session: tube.session) } catch {
                     trace?("\(client.key): player script unavailable (\(error.localizedDescription))")
@@ -273,7 +277,7 @@ final class StreamResolver: @unchecked Sendable {
                 case .failure(let e)?: trace?("\(client.key): player PO token failed (\(e.localizedDescription))")
                 case nil: break
                 }
-                if pageClient, let t = await AccountPoTokenProvider.shared.token(for: videoId) { playerToken = t }
+                if pageClient, !client.fromWatchPage, let t = await AccountPoTokenProvider.shared.token(for: videoId) { playerToken = t }
             }
             var json: JSON
             if client.fromWatchPage {
