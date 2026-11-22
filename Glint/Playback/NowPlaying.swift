@@ -74,6 +74,13 @@ final class NowPlaying {
         loadArtwork(item.thumbnail)
     }
 
+    /// "album cover (lh3…)" / "video thumbnail (i.ytimg.com/vi/…/hqdefault.jpg)" for the log.
+    private static func describe(_ url: URL) -> String {
+        let host = url.host ?? ""
+        let kind = host.contains("googleusercontent") || host.contains("ggpht") ? "album cover" : host.contains("ytimg") ? "video thumbnail" : "image"
+        return "\(kind) (\(host)\(url.path.suffix(40)))"
+    }
+
     /// Built outside the main actor: MediaPlayer calls the handler on a background queue.
     nonisolated private static func makeArtwork(_ image: UIImage) -> MPMediaItemArtwork {
         MPMediaItemArtwork(boundsSize: image.size) { _ in image }
@@ -89,10 +96,14 @@ final class NowPlaying {
             var image: UIImage?
             if let sharp = Artwork.sharp(url, size: 1200), sharp != url { image = await ImagePipeline.shared.image(sharp) }
             if image == nil { image = await ImagePipeline.shared.image(url) }
-            guard let image else { return }
+            guard let image else {
+                self.controller?.note("Lock screen artwork: couldn't load \(Self.describe(url))")
+                return
+            }
             guard self.artworkURL == url else { return }
             self.artwork = Self.makeArtwork(image)
             self.update()
+            self.controller?.note("Lock screen artwork: \(Self.describe(url)), \(Int(image.size.width))×\(Int(image.size.height))")
         }
     }
 }
