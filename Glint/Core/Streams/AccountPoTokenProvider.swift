@@ -39,6 +39,39 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
     private var failedAt = Date.distantPast
     private(set) var lastError: String?
 
+    override init() {
+        super.init()
+        // Never left running in the background: a long-lived youtube.com page renews the
+        // sign-in cookies on its own, and the app holding the old ones then gets signed out.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.syncCookiesBack(); self.teardown() }
+            }
+        }
+    }
+
+    /// Copies the page's YouTube / Google cookies into the app's sign-in.
+    private func syncCookiesBack() async {
+        guard let store = webView?.configuration.websiteDataStore.httpCookieStore else { return }
+        let cookies = await store.allCookies()
+        let updates = cookies.filter { $0.domain.contains("youtube.com") || $0.domain.contains("google.com") }
+            .map { StoredCookie(name: $0.name, value: $0.value, domain: $0.domain, path: $0.path, expires: $0.expiresDate) }
+        InnerTube.shared.mergeCookies(updates)
+    }
+
+    /// Blocks the page's own sign-in cookie renewal (only the app's requests keep the session).
+    private static func noRotationRules() async -> WKContentRuleList? {
+        let rules = """
+            [{"trigger":{"url-filter":"RotateCookies"},"action":{"type":"block"}},
+             {"trigger":{"url-filter":"accounts\\.google\\.com/.*(CheckCookie|SetSID|SetOSID)"},"action":{"type":"block"}},
+             {"trigger":{"url-filter":"accounts\\.youtube\\.com/"},"action":{"type":"block"}}]
+            """
+        return try? await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: "glint-no-cookie-rotation", encodedContentRuleList: rules)
+    }
+
     /// The signed-in page's session (building the page and minter if needed), or nil.
     func currentSession() async -> Session? {
         guard let auth = InnerTube.shared.auth, auth.isValid else { return nil }
@@ -82,6 +115,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
     func pagePlayerResponse(videoId: String, sts: Int?) async -> Data? {
         guard await currentSession() != nil, let webView, let auth = InnerTube.shared.auth else { return nil }
         lastPlayerError = nil
+        defer { Task { await self.syncCookiesBack() } }
         do {
             let text = try await run("Player request", webView, """
                 const c = window.ytcfg;
@@ -281,6 +315,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
                   "requestKey": PoTokenProvider.requestKey])
         let ttl = (lifetime as? NSNumber)?.doubleValue ?? 0
         minterExpiry = Date().addingTimeInterval(max(min(ttl > 0 ? ttl : 6 * 3600, 6 * 3600) - 300, 60))
+        await syncCookiesBack()
         let s = Session(visitorData: visitor, dataSyncId: datasync, clientVersion: info["version"] as? String)
         session = s
         account = auth
@@ -292,6 +327,10 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.mediaTypesRequiringUserActionForPlayback = .all
+        guard let rules = await Self.noRotationRules() else {
+            throw PageError.step("Couldn't set up cookie protection")   // never without it
+        }
+        config.userContentController.add(rules)
         let store = config.websiteDataStore.httpCookieStore
         for c in auth.cookies {
             var props: [HTTPCookiePropertyKey: Any] = [

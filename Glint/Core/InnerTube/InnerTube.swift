@@ -131,6 +131,18 @@ final class InnerTube: @unchecked Sendable {
         if let merged { onAuthCookiesChanged?(merged) }
     }
 
+    /// Cookies the signed-in web view ended up with (so the app and the page never hold
+    /// different copies of the session, which Google treats as a stolen session).
+    func mergeCookies(_ updates: [StoredCookie]) {
+        guard !updates.isEmpty else { return }
+        let merged: AuthContext? = lock.withLock {
+            guard var current = _auth, current.merge(updates) else { return nil }
+            _auth = current
+            return current
+        }
+        if let merged { onAuthCookiesChanged?(merged) }
+    }
+
     /// Fetches a fresh visitor id so logged-out requests look like a normal browser.
     func warmUp() async {
         guard visitorData == nil else { return }
