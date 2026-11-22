@@ -118,6 +118,12 @@ final class PlayerController {
     @ObservationIgnored private var failures = 0
     /// Times the loopback SABR server was restarted for this item.
     @ObservationIgnored private var sabrServerRestarts = 0
+    /// Recent requests the loopback server couldn't answer (AVPlayer saw a 502), and what was
+    /// done about it for this item: 0 nothing yet, 1 fresh session, 2 gave up on SABR.
+    @ObservationIgnored private var sabrFailureTimes: [Date] = []
+    @ObservationIgnored private var sabrRescues = 0
+    @ObservationIgnored private var lastSabrRescue = Date.distantPast
+    @ObservationIgnored private var lastSabrErrorNote: (text: String, at: Date)?
     @ObservationIgnored private var lastSabrRestart = Date.distantPast
     @ObservationIgnored private var pausedAt: Date?
     /// The single variant SABR Auto is playing (nil when a quality was chosen or not SABR).
@@ -210,6 +216,10 @@ final class PlayerController {
             Task { @MainActor in PlayerController.shared.note(line) }
         }
         YouTubeWatchSync.shared.trace = { [weak self] line in self?.note(line) }
+        SabrServer.shared.onError = { file, error in
+            let text = error.localizedDescription
+            Task { @MainActor in PlayerController.shared.sabrRequestFailed(file, text) }
+        }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 4), queue: .main) { [weak self] t in
             MainActor.assumeIsolated { self?.tick(t.seconds) }
         }
@@ -433,6 +443,7 @@ final class PlayerController {
         segments = []; skipped = []; highlight = nil; manualSegment = nil; loadError = nil
         captionTask?.cancel(); selectedCaption = nil; captionCues = []
         currentTime = 0; duration = 0; playingResolution = nil; failures = 0; sabrServerRestarts = 0
+        sabrFailureTimes = []; sabrRescues = 0
         player.isMuted = false; mutedBySponsor = false
         isLoading = true
         if presentation == .hidden { presentation = item.isMusic ? .mini : .expanded }
@@ -696,6 +707,32 @@ final class PlayerController {
         }
     }
 
+    /// The loopback server couldn't answer AVPlayer (it got a 502). Log why (once per reason
+    /// every 15 s). Harmless while playing (often another quality's playlist), but if playback
+    /// is stuck on them: first a fresh player response and SABR session from the same spot,
+    /// then the 360p file instead of SABR.
+    private func sabrRequestFailed(_ file: String, _ text: String) {
+        guard stream?.sabr != nil else { return }
+        if lastSabrErrorNote?.text != text || Date().timeIntervalSince(lastSabrErrorNote?.at ?? .distantPast) > 15 {
+            lastSabrErrorNote = (text, Date())
+            note("SABR \(file): \(text)")
+        }
+        let now = Date()
+        sabrFailureTimes = sabrFailureTimes.filter { now.timeIntervalSince($0) < 20 } + [now]
+        // Stuck on them, and the last rescue (if any) had time to work.
+        guard isBuffering, sabrFailureTimes.count >= 6,
+              now.timeIntervalSince(lastSabrRescue) > 20 else { return }
+        sabrFailureTimes = []
+        sabrRescues += 1
+        lastSabrRescue = now
+        if sabrRescues == 1 {
+            note("SABR keeps failing while buffering → fresh session from \(formatTime(currentTime))")
+            refresh(at: currentTime)
+        } else {
+            recover(player.currentItem, message: "SABR keeps failing (\(text))")
+        }
+    }
+
     /// SABR, Auto, buffering for a while: if the loopback server answers, the connection can't
     /// keep up, so lower the speed estimate and step down a quality at the same spot.
     private func sabrStalled(_ item: AVPlayerItem?) async {
@@ -794,12 +831,12 @@ final class PlayerController {
 
     /// Remembers where long videos were left so they resume there next time.
     private func savePosition(force: Bool = false) {
+        lastPositionSave = Date()   // songs too (they return below), or every tick would call this
         if activeVideoId != nil, stream?.isLive != true, duration > 0 {
             YouTubeWatchSync.shared.report(position: currentTime, length: duration, playing: isPlaying, force: force)
         }
         guard let id = activeVideoId, !activeIsMusic, stream?.isLive != true, duration > 0 else { return }
         WatchHistory.shared.save(currentTime, duration: duration, for: id)
-        lastPositionSave = Date()
     }
 
     func seek(to seconds: Double) {

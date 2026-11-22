@@ -27,7 +27,7 @@ struct SabrConfig: Sendable {
 /// when playback jumps elsewhere. Modelled on LuanRT/googlevideo's SabrStream (MIT).
 actor SabrSession {
     enum SabrFailure: LocalizedError {
-        case http(Int), server(String), protection, reload, noMedia
+        case http(Int), server(String), protection, reload, noMedia, notDelivered(String)
         var errorDescription: String? {
             switch self {
             case .http(let c): return "SABR request failed (\(c))"
@@ -35,6 +35,7 @@ actor SabrSession {
             case .protection: return "SABR: stream protection rejected the PO token"
             case .reload: return "SABR: YouTube asked for a fresh player response"
             case .noMedia: return "SABR: no media for that position"
+            case .notDelivered(let what): return "SABR: \(what) wasn't delivered"
             }
         }
     }
@@ -114,7 +115,14 @@ actor SabrSession {
     /// ftyp + moov of a format (what HLS's EXT-X-MAP wants; the sidx is left out).
     func initSegment(_ itag: Int) async throws -> Data {
         guard let f = format(itag) else { throw SabrFailure.noMedia }
-        if !f.isAudio { select(f) }
+        // AVPlayer loads other qualities' playlists (and so their inits) while it plays one.
+        // Ask for this one just long enough to get its init, then go back to the one playing,
+        // or the two would keep cancelling each other's requests.
+        let playing = currentVideo
+        if !f.isAudio, inits[itag] == nil { select(f) }
+        defer {
+            if let playing, playing.itag != itag, currentVideo?.itag == itag { currentVideo = playing }
+        }
         try await fetch(Key(itag: itag, number: 0), atMs: lastPositionMs)
         guard let d = inits[itag] else { throw lastError ?? SabrFailure.noMedia }
         return d.prefix(f.initRange.count)
@@ -163,7 +171,7 @@ actor SabrSession {
             if isCached(key) { return }
             if attempt >= 1, let e = lastError, !(e is CancellationError) { throw e }
         }
-        throw lastError ?? SabrFailure.noMedia
+        throw lastError ?? SabrFailure.notDelivered(key.number == 0 ? "init of itag \(key.itag)" : "itag \(key.itag) segment \(key.number)")
     }
 
     private func isCached(_ key: Key) -> Bool {

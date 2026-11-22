@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// The playback-tracking URLs of an authenticated player response.
 struct PlaybackTracking: Sendable, Hashable {
@@ -35,6 +36,8 @@ final class YouTubeWatchSync {
     private var lastPosition: Double = 0
     private var lastPing = Date.distantPast
     private var reportedOK = false
+    private var lastSent: (position: Double, playing: Bool)?
+    private var lastFailureNote = Date.distantPast
 
     /// A stream is about to play. Same video again (refresh, quality change) keeps the session.
     func begin(videoId: String, tracking: PlaybackTracking?, at position: Double) {
@@ -51,6 +54,7 @@ final class YouTubeWatchSync {
         lastPosition = position
         lastPing = .distantPast
         reportedOK = false
+        lastSent = nil
     }
 
     /// Called every ~10 s while playing and on pause / close / end.
@@ -63,6 +67,9 @@ final class YouTubeWatchSync {
             send(tracking.playback, videoId: videoId, params: ["cmt": Self.fmt(position), "len": Self.fmt(length)])
             return
         }
+        // Nothing new to say (paused in the same place, already reported): don't send again.
+        if let last = lastSent, last.playing == playing, abs(last.position - position) < 1,
+           !playing || Date().timeIntervalSince(lastPing) < 10 { return }
         guard force || !playing || Date().timeIntervalSince(lastPing) >= 10 else { return }
         // A jump (seek) closes the range watched so far and starts a new one.
         let expected = lastPosition + Date().timeIntervalSince(lastPing == .distantPast ? started : lastPing) + 3
@@ -77,6 +84,7 @@ final class YouTubeWatchSync {
         segmentStart = position
         lastPosition = position
         lastPing = Date()
+        lastSent = (position, playing)
     }
 
     private func send(_ base: URL, videoId: String, params: [String: String]) {
@@ -104,17 +112,31 @@ final class YouTubeWatchSync {
         req.timeoutInterval = 15
 
         let kind = base == tracking?.playback ? "playback" : "watchtime"
+        // Finish even if the app is about to be suspended (pausing, then leaving the app, is
+        // exactly when the last report goes out); otherwise it fails when the app wakes up.
+        let bg = UIApplication.shared.beginBackgroundTask(withName: "YouTube watch report")
         Task { [weak self] in
-            let code = ((try? await InnerTube.shared.session.data(for: req))?.1 as? HTTPURLResponse)?.statusCode ?? 0
+            var problem: String?
+            do {
+                let (_, resp) = try await InnerTube.shared.session.data(for: req)
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if !(200..<300).contains(code) { problem = "HTTP \(code)" }
+            } catch {
+                problem = (error as? URLError).map { "\($0.code.rawValue) \($0.localizedDescription)" } ?? error.localizedDescription
+            }
             await MainActor.run {
+                defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) } }
                 guard let self else { return }
-                if (200..<300).contains(code) {
-                    if !self.reportedOK {
-                        self.reportedOK = true
-                        self.trace?("Watch progress syncing to your YouTube account")
+                if let problem {
+                    // At most one line a minute: a dead connection shouldn't flood the log.
+                    if Date().timeIntervalSince(self.lastFailureNote) > 60 {
+                        self.lastFailureNote = Date()
+                        self.trace?("YouTube \(kind) report failed: \(problem)")
                     }
-                } else {
-                    self.trace?("YouTube \(kind) report failed (\(code))")
+                    self.lastSent = nil   // try again with the next report
+                } else if !self.reportedOK {
+                    self.reportedOK = true
+                    self.trace?("Watch progress syncing to your YouTube account")
                 }
             }
         }

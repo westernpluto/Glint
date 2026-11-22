@@ -19,6 +19,8 @@ final class SabrServer: @unchecked Sendable {
     private var starting: [CheckedContinuation<Void, Error>] = []
     private var sessions: [String: SabrSession] = [:]
     private var order: [String] = []
+    /// A request AVPlayer made couldn't be answered (it gets a 502): which file and why.
+    var onError: (@Sendable (_ file: String, _ error: Error) -> Void)?
 
     // MARK: Lifecycle
 
@@ -196,6 +198,7 @@ final class SabrServer: @unchecked Sendable {
                 let (body, type) = try await Self.serve(name, session: session, videos: videos)
                 self.queue.async { self.respond(conn, status: 200, body: body, type: type, range: range, headOnly: isHead) }
             } catch {
+                self.onError?(name, error)
                 self.queue.async { self.respond(conn, status: 502, body: Data(error.localizedDescription.utf8)) }
             }
         }
