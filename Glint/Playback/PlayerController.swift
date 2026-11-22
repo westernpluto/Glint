@@ -729,6 +729,16 @@ final class PlayerController {
             return
         }
         sabrFailureTimes = sabrFailureTimes.filter { now.timeIntervalSince($0) < 20 } + [now]
+        // Signed in, segments that SABR never delivers (seen with songs): the streams fetched
+        // without the account are direct links on this network, so switch to them.
+        if text.contains("wasn't delivered"), InnerTube.shared.isSignedIn, !StreamResolver.shared.anonymousStreams,
+           sabrFailureTimes.count >= 2, now.timeIntervalSince(lastSabrRescue) > 20 {
+            StreamResolver.shared.useAnonymousStreams(because: "SABR isn't delivering this stream")
+            lastSabrRescue = now
+            sabrFailureTimes = []
+            refresh(at: currentTime)
+            return
+        }
         // Stuck on them, and the last rescue (if any) had time to work.
         guard isBuffering, sabrFailureTimes.count >= 6,
               now.timeIntervalSince(lastSabrRescue) > 20 else { return }

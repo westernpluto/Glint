@@ -103,15 +103,17 @@ final class StreamResolver: @unchecked Sendable {
     /// Signed in, YouTube's stream protection kept refusing the account-bound token: fetch
     /// streams without the account (as before signing in) and use the account only for the
     /// watch-history reports. Until the app restarts.
-    private var _anonymousStreams = false
+    /// Remembered across launches (only matters while signed in).
+    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams")
     var anonymousStreams: Bool { cacheLock.withLock { _anonymousStreams } }
-    func useAnonymousStreams() {
+    func useAnonymousStreams(because reason: String = "Stream protection refuses the account's token") {
         let changed: Bool = cacheLock.withLock {
             defer { _anonymousStreams = true }
             if !_anonymousStreams { cache = [:] }   // links resolved with the account
             return !_anonymousStreams
         }
-        if changed { trace?("Stream protection refuses the account's token: streaming without the account (history still syncs)") }
+        UserDefaults.standard.set(true, forKey: "anonymousStreams")
+        if changed { trace?("\(reason): streaming without the account (history still syncs)") }
     }
     private let penaltyLifetime: TimeInterval = 60 * 60
 
@@ -180,7 +182,12 @@ final class StreamResolver: @unchecked Sendable {
 
     func resolve(videoId: String, hints: Hints = Hints()) async throws -> ResolvedStream {
         if let hit = cached(videoId) { return hit }
-        let stream = try await resolveFresh(videoId: videoId, hints: hints)
+        var stream = try await resolveFresh(videoId: videoId, hints: hints)
+        // Streaming without the account (whatever client it came from): a signed-in request
+        // just for the watch-history links.
+        if stream.tracking == nil, tube.isSignedIn, anonymousStreams, !stream.isLive {
+            stream.tracking = await accountTracking(videoId)
+        }
         if !stream.isLive { store(stream, for: videoId) }
         return stream
     }
@@ -253,6 +260,7 @@ final class StreamResolver: @unchecked Sendable {
                     // back to the account's streams.
                     trace?("Without the account: \(error.localizedDescription) → back to streaming with it")
                     cacheLock.withLock { _anonymousStreams = false }
+                    UserDefaults.standard.set(false, forKey: "anonymousStreams")
                 }
             }
             guard var stream = built else {
@@ -263,12 +271,6 @@ final class StreamResolver: @unchecked Sendable {
             stream.clientKey = client.key
             // Only a request that carried the account reports to it.
             if client.isWebPlayback, signedIn { stream.tracking = PlaybackTracking(json) }
-            if client.isWebPlayback, anonymous,
-               let authed = try? await player(videoId: videoId, client: client, sts: webPlayer?.sts,
-                                              poToken: playerToken, authenticated: true) {
-                // Streaming without the account; this signed-in response is only for history.
-                stream.tracking = PlaybackTracking(authed)
-            }
             if stream.sabr != nil {
                 if let p = progressive, let url = p.progressiveURL {
                     stream.progressiveURL = url
@@ -482,6 +484,18 @@ final class StreamResolver: @unchecked Sendable {
               let seg = URL(string: String(line), relativeTo: url)?.absoluteURL else { return nil }
         guard let status = await status(seg, at: 0, userAgent: userAgent).code else { return nil }
         return (200..<300).contains(status) ? nil : "segment \(status)"
+    }
+
+    /// Playback-tracking links from a signed-in MWEB player request (only the history part of
+    /// the answer is used).
+    private func accountTracking(_ videoId: String) async -> PlaybackTracking? {
+        let sts = try? await JSChallengeSolver.shared.player(session: tube.session).sts
+        let token = try? await Self.videoToken(videoId, visitorData: tube.visitorData).get()
+        guard let json = try? await player(videoId: videoId, client: .mweb, sts: sts, poToken: token, authenticated: true)
+        else { return nil }
+        let t = PlaybackTracking(json)
+        if t == nil { trace?("No watch-history links for your account (\(json.at("playabilityStatus.status").string ?? "?"))") }
+        return t
     }
 
     private static func videoToken(_ videoId: String, visitorData: String?) async -> Result<String, Error> {

@@ -175,7 +175,10 @@ actor SabrSession {
             if isCached(key) { return }
             if attempt >= 1, let e = lastError, !(e is CancellationError) { throw e }
         }
-        throw lastError ?? SabrFailure.notDelivered(key.number == 0 ? "init of itag \(key.itag)" : "itag \(key.itag) segment \(key.number)")
+        let have = (cache.keys.filter { $0.itag == key.itag }.map(\.number).sorted())
+        let detail = key.number == 0 ? "init of itag \(key.itag)"
+            : "itag \(key.itag) segment \(key.number) of \(indexes[key.itag]?.count ?? 0) (cached \(have.first.map { "\($0)…\(have.last ?? $0)" } ?? "none"), last answer \(lastAnswerNumbers))"
+        throw lastError ?? SabrFailure.notDelivered(detail)
     }
 
     private func isCached(_ key: Key) -> Bool {
@@ -186,6 +189,8 @@ actor SabrSession {
     private var idle = false
     /// Whether the last answer carried any media (an empty one doesn't get an automatic follow-up).
     private var lastAnswerHadMedia = true
+    /// Segment numbers the last answer carried, for diagnostics ("itag:first…last").
+    private var lastAnswerNumbers = "none"
 
     /// How far past its start position the server says it sends per answer
     /// (NextRequestPolicy target readahead; ~15 s audio / ~25 s video seen).
@@ -352,6 +357,7 @@ actor SabrSession {
         var pending: [Int: (itag: Int, isInit: Bool, number: Int, data: Data)] = [:]
         var redirected = false
         var mediaCount = 0
+        var answerNumbers: [Int: ClosedRange<Int>] = [:]
         for try await event in Self.streamer.stream(req) {
             let parts: [UMP.Part]
             switch event {
@@ -373,6 +379,10 @@ actor SabrSession {
                 case 22:   // MEDIA_END
                     guard let first = part.payload.first, let seg = pending.removeValue(forKey: Int(first)) else { continue }
                     mediaCount += 1
+                    if !seg.isInit {
+                        let r = answerNumbers[seg.itag]
+                        answerNumbers[seg.itag] = min(r?.lowerBound ?? seg.number, seg.number)...max(r?.upperBound ?? seg.number, seg.number)
+                    }
                     store(seg.itag, isInit: seg.isInit, number: seg.number, data: seg.data)
                 case 35:   // NEXT_REQUEST_POLICY
                     let policy = ProtoMessage(part.payload)
@@ -396,7 +406,11 @@ actor SabrSession {
                 }
             }
         }
-        if !redirected { lastAnswerHadMedia = mediaCount > 0 }
+        if !redirected {
+            lastAnswerHadMedia = mediaCount > 0
+            lastAnswerNumbers = answerNumbers.isEmpty ? "empty"
+                : answerNumbers.map { "\($0.key):\($0.value.lowerBound)…\($0.value.upperBound)" }.sorted().joined(separator: " ")
+        }
         if let firstByte { SabrBandwidth.record(bytes: received, seconds: Date().timeIntervalSince(firstByte)) }
         return redirected && mediaCount == 0
     }
