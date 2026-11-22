@@ -967,14 +967,22 @@ final class PlayerController {
         activeVideoId = nil
         refreshTask?.cancel()
         loadTask?.cancel()
+        // Silence and hide first, so the player is gone the moment you close it…
         player.pause()
-        player.replaceCurrentItem(with: nil)
         queue = []; index = 0; stream = nil; details = nil; extras = nil
         sleepAt = nil; sleepAtEnd = false; manualSegment = nil
         presentation = .hidden
         isFullscreen = false
         nowPlaying.update()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // …then the slow teardown: releasing the item after this frame, and deactivating the
+        // audio session (which can block for a second or more) off the main thread.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.current == nil else { return }   // something new started meanwhile
+            self.player.replaceCurrentItem(with: nil)
+            DispatchQueue.global(qos: .utility).async {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
+        }
     }
 
     func jumpToHighlight() {
