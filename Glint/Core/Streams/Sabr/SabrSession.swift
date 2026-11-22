@@ -75,6 +75,8 @@ actor SabrSession {
     /// number 0 = the init segment.
     private struct Key: Hashable { var itag: Int; var number: Int }
     private var cache: [Key: Data] = [:]
+    /// Every media segment the server has sent (kept after eviction, for buffered ranges).
+    private var received: Set<Key> = []
     private var cacheOrder: [Key] = []
     private var cacheBytes = 0
     private let cacheLimit = 96 * 1024 * 1024
@@ -489,7 +491,16 @@ actor SabrSession {
         guard let idx = indexes[itag],
               let i = idx.firstIndex(where: { ms >= $0.start && ms < $0.start + $0.duration }) else { return nil }
         var last = i
-        guard cache[Key(itag: itag, number: i + 1)] != nil else { return nil }
+        guard cache[Key(itag: itag, number: i + 1)] != nil else {
+            // Not held from here: say where what we hold ends (the segment just before), as
+            // googlevideo does; the server continues after it. Without any buffered range it
+            // answered empty once the first batch was in.
+            guard i >= 1, received.contains(Key(itag: itag, number: i)) else { return nil }
+            var first = i
+            while first > 1, received.contains(Key(itag: itag, number: first - 1)) { first -= 1 }
+            let start = idx[first - 1].start
+            return (first, i, start, idx[i - 1].start + idx[i - 1].duration - start)
+        }
         while last + 1 < idx.count, cache[Key(itag: itag, number: last + 2)] != nil { last += 1 }
         let start = idx[i].start
         return (i + 1, last + 1, start, idx[last].start + idx[last].duration - start)
@@ -511,6 +522,7 @@ actor SabrSession {
                 }
             }
         } else {
+            received.insert(key)
             guard cache[key] == nil else { return }
             cache[key] = data
             cacheOrder.append(key)
