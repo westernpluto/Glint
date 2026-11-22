@@ -321,22 +321,35 @@ final class StreamResolver: @unchecked Sendable {
             best[key] = o
         }
         let options = best.values.sorted(by: Self.order)
-        let config = SabrConfig(videoId: details.id, url: url, ustreamerConfig: ustreamer,
-                                clientNameId: client.clientId, clientVersion: client.clientVersion,
-                                poToken: sd[Self.sabrTokenKey].string.flatMap(Self.base64URLData),
-                                userAgent: client.userAgent)
-        let session = SabrSession(config: config, audio: audio,
-                                  videos: options.compactMap { if case .dash(let f) = $0.source { return f }; return nil })
-        do {
-            try await SabrServer.shared.start()
-            // Audio plus the video Auto will play, from where playback starts: one round trip
-            // gets both init segments and the first media.
-            let video = hints.audioOnly ? nil : SabrBandwidth.autoVideo(
-                session.videos, audioBitrate: audio.bitrate, defaultQuality: hints.defaultQuality)
-            try await session.prepare(video: video, atMs: max(0, hints.startAt) * 1000)
-        } catch {
-            trace?("\(client.key): SABR failed (\(error.localizedDescription))")
-            return nil
+        let videoFormats = options.compactMap { if case .dash(let f) = $0.source { return f }; return nil }
+        // The stream token; if stream protection refuses it, the video-bound one.
+        let tokens = [sd[Self.sabrTokenKey].string, sd[Self.sabrVideoTokenKey].string].compactMap { $0 }
+        var session: SabrSession!
+        for (attempt, token) in (tokens.isEmpty ? [nil] : tokens.map(Optional.some)).enumerated() {
+            let config = SabrConfig(videoId: details.id, url: url, ustreamerConfig: ustreamer,
+                                    clientNameId: client.clientId, clientVersion: client.clientVersion,
+                                    poToken: token.flatMap(Self.base64URLData),
+                                    userAgent: client.userAgent)
+            session = SabrSession(config: config, audio: audio, videos: videoFormats)
+            do {
+                try await SabrServer.shared.start()
+                // Audio plus the video Auto will play, from where playback starts: one round trip
+                // gets both init segments and the first media.
+                let video = hints.audioOnly ? nil : SabrBandwidth.autoVideo(
+                    session.videos, audioBitrate: audio.bitrate, defaultQuality: hints.defaultQuality)
+                try await session.prepare(video: video, atMs: max(0, hints.startAt) * 1000)
+                if attempt > 0 { trace?("\(client.key): SABR ok with the video-bound token") }
+                break
+            } catch {
+                var refused = false
+                if case .protection? = error as? SabrSession.SabrFailure { refused = true }
+                if refused, attempt + 1 < tokens.count {
+                    trace?("\(client.key): SABR refused the stream token; trying the video-bound one")
+                    continue
+                }
+                trace?("\(client.key): SABR failed (\(error.localizedDescription))")
+                return nil
+            }
         }
         trace?("\(client.key): SABR ok, \(options.count) qualities, audio itag \(audio.itag)")
         var stream = ResolvedStream(details: details, options: options, hlsURL: nil, manifest: nil,
@@ -650,7 +663,12 @@ final class StreamResolver: @unchecked Sendable {
         let visitorData = tube.visitorData
         // yt-dlp binds the stream token to the account's data sync id when signed in, to the
         // visitor id otherwise.
-        let dataSyncId = json.at("responseContext.mainAppWebResponseContext.datasyncId").string
+        // Signed in, it must be the account's (a visitor-bound token gets the first minute or
+        // so, then "stream protection" stops the stream), so fetch the id if this response
+        // didn't carry it.
+        var dataSyncId = json.at("responseContext.mainAppWebResponseContext.datasyncId").string
+        if dataSyncId == nil, tube.isSignedIn { dataSyncId = await tube.ensureDataSyncId() }
+        let bindingKind = dataSyncId != nil ? "account" : "visitor"
         if let binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:)) {
             do {
                 pot = try await PoTokenProvider.shared.token(for: binding, visitorData: visitorData)
@@ -658,7 +676,10 @@ final class StreamResolver: @unchecked Sendable {
                 trace?("\(client.key): PO token failed (\(error.localizedDescription))")
             }
         }
-        trace?("\(client.key): player \(player.id), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(pot == nil ? "none" : "ok")")
+        if tube.isSignedIn, dataSyncId == nil {
+            trace?("\(client.key): signed in but no account id for the stream token (using the visitor id)")
+        }
+        trace?("\(client.key): player \(player.id), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(pot == nil ? "none" : "ok (\(bindingKind))")")
 
         func rewrite(_ f: JSON) -> JSON {
             guard case .object(var o) = f, let link = PendingLink(f) else { return f }
@@ -700,6 +721,9 @@ final class StreamResolver: @unchecked Sendable {
             // SABR (YouTube's own protocol): the link with n solved, and the token it sends.
             sd[Self.sabrURLKey] = .string(sabrN.flatMap { n in solutions.n[n].map { Self.settingQuery(sabr, "n", $0) } } ?? sabr)
             if let pot { sd[Self.sabrTokenKey] = .string(pot) }
+            // If stream protection refuses that one: a token bound to the video (some sessions
+            // are in YouTube's video-bound experiment, as with HLS above).
+            if let videoToken, videoToken != pot { sd[Self.sabrVideoTokenKey] = .string(videoToken) }
         }
         root["streamingData"] = .object(sd)
         return .object(root)
@@ -708,6 +732,7 @@ final class StreamResolver: @unchecked Sendable {
     private static let videoBoundManifestKey = "glintVideoBoundHlsManifestUrl"
     private static let sabrURLKey = "glintSabrUrl"
     private static let sabrTokenKey = "glintSabrPoToken"
+    private static let sabrVideoTokenKey = "glintSabrVideoPoToken"
 
     /// The n challenge in an HLS manifest URL's path (`…/n/<challenge>/…`).
     private static func manifestN(_ url: String) -> String? {

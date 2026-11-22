@@ -41,7 +41,22 @@ final class InnerTube: @unchecked Sendable {
 
     var auth: AuthContext? {
         get { lock.lock(); defer { lock.unlock() }; return _auth }
-        set { lock.lock(); _auth = newValue; lock.unlock() }
+        set { lock.lock(); _auth = newValue; _dataSyncId = nil; lock.unlock() }
+    }
+
+    /// The signed-in account's data sync id (`responseContext.mainAppWebResponseContext.datasyncId`),
+    /// from any signed-in response. Signed in, stream tokens must be bound to it.
+    private var _dataSyncId: String?
+    var dataSyncId: String? { lock.withLock { _dataSyncId } }
+
+    /// The data sync id, asking for it (one light signed-in request) if no response carried it yet.
+    func ensureDataSyncId() async -> String? {
+        if let id = dataSyncId { return id }
+        guard isSignedIn else { return nil }
+        _ = try? await call("account/account_menu", client: .web, body: [:])
+        if let id = dataSyncId { return id }
+        _ = try? await call("browse", client: .web, body: ["browseId": "FEwhat_to_watch"])
+        return dataSyncId
     }
 
     var visitorData: String? {
@@ -95,6 +110,9 @@ final class InnerTube: @unchecked Sendable {
         let json = try JSON.parse(data)
         if visitorData == nil, let v = json.at("responseContext.visitorData").string {
             visitorData = v
+        }
+        if let used = usedAuth, let id = json.at("responseContext.mainAppWebResponseContext.datasyncId").string, !id.isEmpty {
+            lock.withLock { if _auth == used { _dataSyncId = id } }
         }
         return json
     }
