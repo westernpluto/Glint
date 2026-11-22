@@ -41,7 +41,20 @@ final class InnerTube: @unchecked Sendable {
 
     var auth: AuthContext? {
         get { lock.lock(); defer { lock.unlock() }; return _auth }
-        set { lock.lock(); _auth = newValue; _dataSyncId = nil; lock.unlock() }
+        set { lock.lock(); _auth = newValue; _dataSyncId = nil; _accountVisitorData = nil; lock.unlock() }
+    }
+
+    /// The signed-in session's visitor id (from signed-in responses).
+    private var _accountVisitorData: String?
+    var accountVisitorData: String? { lock.withLock { _accountVisitorData } }
+
+    /// The visitor id to mint stream tokens for and send with signed-in requests: the
+    /// account's when signed in (fetched with one light request if needed), else the anonymous one.
+    func streamVisitorData(signedIn: Bool) async -> String? {
+        guard signedIn, isSignedIn else { return visitorData }
+        if accountVisitorData == nil { _ = await ensureDataSyncId() }
+        if accountVisitorData == nil { _ = try? await call("account/account_menu", client: .web, body: [:]) }
+        return accountVisitorData ?? visitorData
     }
 
     /// The signed-in account's data sync id (`responseContext.mainAppWebResponseContext.datasyncId`),
@@ -79,8 +92,15 @@ final class InnerTube: @unchecked Sendable {
         var req = URLRequest(url: url.url!)
         req.httpMethod = "POST"
 
+        // Cookie auth only works for the browser clients.
+        let browserClient = client.clientName.hasPrefix("WEB") || client.clientName == "MWEB"
+        let usedAuth = (authenticated && browserClient) ? auth : nil
+        // Signed in: the account's own visitor id (the one its cookies belong to), not the
+        // anonymous one; a mismatch leaves YouTube's stream protection "pending" forever.
+        let visitor = usedAuth?.isValid == true ? (accountVisitorData ?? visitorData) : visitorData
+
         var payload = body
-        payload["context"] = client.context(visitorData: visitorData, hl: hl, gl: gl)
+        payload["context"] = client.context(visitorData: visitor, hl: hl, gl: gl)
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -89,11 +109,8 @@ final class InnerTube: @unchecked Sendable {
         req.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         req.setValue(client.origin, forHTTPHeaderField: "Origin")
         req.setValue(client.origin, forHTTPHeaderField: "X-Origin")
-        if let v = visitorData { req.setValue(v, forHTTPHeaderField: "X-Goog-Visitor-Id") }
+        if let v = visitor { req.setValue(v, forHTTPHeaderField: "X-Goog-Visitor-Id") }
 
-        // Cookie auth only works for the browser clients.
-        let browserClient = client.clientName.hasPrefix("WEB") || client.clientName == "MWEB"
-        let usedAuth = (authenticated && browserClient) ? auth : nil
         if let auth = usedAuth, auth.isValid {
             req.setValue(auth.cookieHeader(forHost: client.host), forHTTPHeaderField: "Cookie")
             if let a = auth.authorization(origin: client.origin) {
@@ -113,6 +130,9 @@ final class InnerTube: @unchecked Sendable {
         }
         if let used = usedAuth, let id = json.at("responseContext.mainAppWebResponseContext.datasyncId").string, !id.isEmpty {
             lock.withLock { if _auth == used { _dataSyncId = id } }
+        }
+        if let used = usedAuth, used.isValid, let v = json.at("responseContext.visitorData").string, !v.isEmpty {
+            lock.withLock { if _auth == used, _accountVisitorData == nil { _accountVisitorData = v } }
         }
         return json
     }

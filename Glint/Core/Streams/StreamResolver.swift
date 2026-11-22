@@ -104,7 +104,7 @@ final class StreamResolver: @unchecked Sendable {
     /// streams without the account (as before signing in) and use the account only for the
     /// watch-history reports. Until the app restarts.
     /// Remembered across launches (only matters while signed in).
-    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams.v4")
+    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams.v5")
     var anonymousStreams: Bool { cacheLock.withLock { _anonymousStreams } }
     func useAnonymousStreams(because reason: String = "Stream protection refuses the account's token") {
         let changed: Bool = cacheLock.withLock {
@@ -112,7 +112,7 @@ final class StreamResolver: @unchecked Sendable {
             if !_anonymousStreams { cache = [:] }   // links resolved with the account
             return !_anonymousStreams
         }
-        UserDefaults.standard.set(true, forKey: "anonymousStreams.v4")
+        UserDefaults.standard.set(true, forKey: "anonymousStreams.v5")
         if changed { trace?("\(reason): streaming without the account (history still syncs)") }
     }
     private let penaltyLifetime: TimeInterval = 60 * 60
@@ -217,7 +217,7 @@ final class StreamResolver: @unchecked Sendable {
                 // A token bound to the video, sent with the request like the website does (it's
                 // what YouTube looks at before asking "are you a bot?"); minted while the player
                 // script loads.
-                let visitorData = tube.visitorData
+                let visitorData = await tube.streamVisitorData(signedIn: signedIn)
                 async let token = Self.videoToken(videoId, visitorData: visitorData)
                 do { webPlayer = try await JSChallengeSolver.shared.player(session: tube.session) } catch {
                     trace?("\(client.key): player script unavailable (\(error.localizedDescription))")
@@ -260,7 +260,7 @@ final class StreamResolver: @unchecked Sendable {
                     // back to the account's streams.
                     trace?("Without the account: \(error.localizedDescription) → back to streaming with it")
                     cacheLock.withLock { _anonymousStreams = false }
-                    UserDefaults.standard.set(false, forKey: "anonymousStreams.v4")
+                    UserDefaults.standard.set(false, forKey: "anonymousStreams.v5")
                 }
             }
             guard var stream = built else {
@@ -367,7 +367,7 @@ final class StreamResolver: @unchecked Sendable {
         var session: SabrSession!
         for (attempt, token) in (tokens.isEmpty ? [nil] : tokens.map(Optional.some)).enumerated() {
             let videoId = details.id
-            let visitorData = tube.visitorData
+            let visitorData = tube.isSignedIn && !anonymousStreams ? (tube.accountVisitorData ?? tube.visitorData) : tube.visitorData
             var config = SabrConfig(videoId: videoId, url: url, ustreamerConfig: ustreamer,
                                     clientNameId: client.clientId, clientVersion: client.clientVersion,
                                     poToken: token.flatMap(Self.base64URLData),
@@ -498,7 +498,7 @@ final class StreamResolver: @unchecked Sendable {
     /// the answer is used).
     private func accountTracking(_ videoId: String) async -> PlaybackTracking? {
         let sts = try? await JSChallengeSolver.shared.player(session: tube.session).sts
-        let token = try? await Self.videoToken(videoId, visitorData: tube.visitorData).get()
+        let token = try? await Self.videoToken(videoId, visitorData: tube.accountVisitorData ?? tube.visitorData).get()
         guard let json = try? await player(videoId: videoId, client: .mweb, sts: sts, poToken: token, authenticated: true)
         else { return nil }
         let t = PlaybackTracking(json)
@@ -721,7 +721,8 @@ final class StreamResolver: @unchecked Sendable {
         }
 
         var pot: String?
-        let visitorData = tube.visitorData
+        // Signed in: minted for the account's visitor id, the one its requests carry.
+        let visitorData = accountBound ? (tube.accountVisitorData ?? tube.visitorData) : tube.visitorData
         // yt-dlp binds the stream token to the account's data sync id when signed in, to the
         // visitor id otherwise.
         // Signed in, it must be the account's (a visitor-bound token gets the first minute or

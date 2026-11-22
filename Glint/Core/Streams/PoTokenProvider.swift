@@ -27,12 +27,14 @@ final class PoTokenProvider: NSObject, WKNavigationDelegate {
     private var webView: WKWebView?
     private var pageLoaded: CheckedContinuation<Void, Error>?
     private var minterExpiry = Date.distantPast
+    private var minterVisitor: String?
     private var minterTask: Task<Void, Error>?
     private var tokens: [String: (token: String, expires: Date)] = [:]
 
     /// A token for `binding` (normally the visitor id), from cache when still fresh.
     func token(for binding: String, visitorData: String?, fresh: Bool = false) async throws -> String {
-        if !fresh, let t = tokens[binding], t.expires > Date() { return t.token }
+        let cacheKey = (visitorData ?? "") + "|" + binding
+        if !fresh, let t = tokens[cacheKey], t.expires > Date() { return t.token }
         try await ensureMinter(visitorData: visitorData)
         let value = try await webView?.callAsyncJavaScript("""
             const r = await window.__glintMint(new TextEncoder().encode(binding));
@@ -42,7 +44,7 @@ final class PoTokenProvider: NSObject, WKNavigationDelegate {
             """, arguments: ["binding": binding], in: nil, contentWorld: .page)
         guard let token = value as? String, !token.isEmpty else { throw PoTokenError.step("Empty PO token") }
         tokens = tokens.filter { $0.value.expires > Date() }
-        tokens[binding] = (token, minterExpiry)
+        tokens[cacheKey] = (token, minterExpiry)
         return token
     }
 
@@ -53,7 +55,8 @@ final class PoTokenProvider: NSObject, WKNavigationDelegate {
     }
 
     private func ensureMinter(visitorData: String?) async throws {
-        if minterExpiry > Date(), webView != nil { return }
+        // One minter per visitor id: BotGuard's challenge is for that visitor.
+        if minterExpiry > Date(), webView != nil, minterVisitor == visitorData { return }
         if let minterTask { return try await minterTask.value }
         let task = Task { try await self.makeMinter(visitorData: visitorData) }
         minterTask = task
@@ -103,6 +106,7 @@ final class PoTokenProvider: NSObject, WKNavigationDelegate {
             return true;
             """, arguments: ["it": integrityToken], in: nil, contentWorld: .page)
 
+        minterVisitor = visitorData
         let lifetime = min(ttl > 0 ? ttl : Self.maxLifetime, Self.maxLifetime) - 5 * 60
         minterExpiry = Date().addingTimeInterval(max(lifetime, 60))
         tokens = [:]
