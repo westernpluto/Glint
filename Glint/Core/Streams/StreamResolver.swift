@@ -820,6 +820,7 @@ final class StreamResolver: @unchecked Sendable {
         // protection hold every signed-in SABR stream at "pending".
         let visitorData = tube.visitorData
         let dataSyncId = accountBound ? json.at("responseContext.mainAppWebResponseContext.datasyncId").string : nil
+        let tokenStart = Date()
         var bindingKind = dataSyncId != nil ? "account" : "visitor"
         var binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:))
         if let page, client.needsPoToken {
@@ -838,8 +839,9 @@ final class StreamResolver: @unchecked Sendable {
                 trace?("\(client.key): PO token failed (\(error.localizedDescription))")
             }
         }
-        let solvedIn = Int(Date().timeIntervalSince(solveStart) * 1000)
-        trace?("\(client.key): player \(player.id) (\(solvedIn) ms incl. token), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(!client.needsPoToken ? "not needed" : pot == nil ? "none" : "ok (\(bindingKind))")")
+        let tokenMs = Int(Date().timeIntervalSince(tokenStart) * 1000)
+        let solveMs = Int(tokenStart.timeIntervalSince(solveStart) * 1000)
+        trace?("\(client.key): player \(player.id) (solve \(solveMs) ms, token \(tokenMs) ms), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(!client.needsPoToken ? "not needed" : pot == nil ? "none" : "ok (\(bindingKind))")")
 
         func rewrite(_ f: JSON) -> JSON {
             guard case .object(var o) = f, let link = PendingLink(f) else { return f }

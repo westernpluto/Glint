@@ -325,10 +325,21 @@ actor SabrSession {
         if let minting { await minting.value }   // a fresh token is on its way
         for _ in 0..<4 {   // redirects
             let redirected = try await requestOnce(atMs: playerTimeMs)
-            if !redirected { return }
+            if redirected { continue }
+            // Experiment: the very first answer is often "nothing yet, wait ~4 s". Ask once
+            // more straight away; if that brings media the start is seconds faster, and if
+            // not the wait is honoured as before.
+            if !triedSkippingFirstBackoff, recording, !lastAnswerHadMedia, backoffUntil > Date() {
+                triedSkippingFirstBackoff = true
+                if recording { startupLog.append("asking again without waiting") }
+                _ = try await requestOnce(atMs: playerTimeMs)
+            }
+            return
         }
         throw SabrFailure.server("too many redirects")
     }
+
+    private var triedSkippingFirstBackoff = false
 
     /// One POST, processed as it streams in. Returns true when the server redirected.
     private func requestOnce(atMs playerTimeMs: Double) async throws -> Bool {
