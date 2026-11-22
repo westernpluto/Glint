@@ -87,30 +87,49 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
 
     // MARK: Building
 
+    /// Runs a step's script; failures say which step and carry WebKit's exception message
+    /// (its error only says "A JavaScript exception occurred").
+    private func run(_ step: String, _ wv: WKWebView, _ script: String, _ args: [String: Any] = [:]) async throws -> Any? {
+        do {
+            return try await wv.callAsyncJavaScript(script, arguments: args, in: nil, contentWorld: .page)
+        } catch {
+            let info = (error as NSError).userInfo
+            let message = info["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+            let page = wv.url?.host.map { " on \($0)\(wv.url?.path ?? "")" } ?? ""
+            throw PageError.step("\(step): \(message)\(page)")
+        }
+    }
+
     private func build(_ auth: AuthContext) async throws -> Session {
         teardown()
         let wv = try await loadSignedInPage(auth)
 
-        // 1. The page's own session data.
-        let cfg = try await wv.callAsyncJavaScript("""
+        // 1. The page's own session data (YouTube fills ytcfg in with script: wait for it).
+        let cfg = try await run("Reading the page", wv, """
+            for (let i = 0; i < 50; i++) {
+                if (window.ytcfg && ytcfg.get && ytcfg.get('VISITOR_DATA')) break;
+                await new Promise(r => setTimeout(r, 200));
+            }
             const c = window.ytcfg;
-            if (!c || !c.get) throw new Error('No ytcfg on the page');
+            if (!c || !c.get) throw new Error('No ytcfg (page: ' + location.href + ')');
             return JSON.stringify({
                 visitor: c.get('VISITOR_DATA') || (c.get('INNERTUBE_CONTEXT') || {}).client?.visitorData || null,
                 datasync: c.get('DATASYNC_ID') || null,
                 loggedIn: !!c.get('LOGGED_IN'),
             });
-            """, arguments: [:], in: nil, contentWorld: .page) as? String
+            """) as? String
         guard let cfgData = cfg?.data(using: .utf8),
               let info = try? JSONSerialization.jsonObject(with: cfgData) as? [String: Any],
               let visitor = info["visitor"] as? String, !visitor.isEmpty
         else { throw PageError.step("The signed-in page had no visitor data") }
-        guard info["loggedIn"] as? Bool == true else { throw PageError.step("The page isn't signed in") }
+        guard info["loggedIn"] as? Bool == true else {
+            throw PageError.step("The page isn't signed in (\(wv.url?.host ?? "?")\(wv.url?.path ?? ""))")
+        }
         let datasync = info["datasync"] as? String
 
         // 2. The BotGuard challenge, asked for from inside the page with the session attached.
         let authHeader = auth.authorization(origin: "https://www.youtube.com") ?? ""
-        let challengeText = try await wv.callAsyncJavaScript("""
+        let challengeText = try await run("BotGuard challenge", wv, """
             const c = window.ytcfg;
             const r = await fetch('/youtubei/v1/att/get?prettyPrint=false', {
                 method: 'POST', credentials: 'include',
@@ -129,8 +148,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
             const j = await r.json();
             if (!j.bgChallenge) throw new Error('No bgChallenge');
             return JSON.stringify(j.bgChallenge);
-            """, arguments: ["authorization": authHeader, "authUser": String(auth.authUser)],
-            in: nil, contentWorld: .page) as? String
+            """, ["authorization": authHeader, "authUser": String(auth.authUser)]) as? String
         guard let challengeData = challengeText?.data(using: .utf8),
               let ch = try? JSON.parse(challengeData),
               let program = ch["program"].string, let globalName = ch["globalName"].string,
@@ -144,8 +162,15 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
 
         // 3. Run it, trade the snapshot for an integrity token (from the page, as the site
         //    does), and keep the minter.
-        let lifetime = try await wv.callAsyncJavaScript("""
-            (0, eval)(interpreter);
+        // The interpreter goes in through WebKit (global scope, outside the page's content
+        // security policy, which can forbid eval()).
+        do {
+            _ = try await wv.evaluateJavaScript(interpreter + "\n;true", in: nil, contentWorld: .page)
+        } catch {
+            let message = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+            throw PageError.step("Loading BotGuard: \(message)")
+        }
+        let lifetime = try await run("Minting", wv, """
             const vm = globalThis[globalName];
             if (!vm || !vm.a) throw new Error('BotGuard unavailable');
             let fns; const ready = new Promise(r => fns = r);
@@ -172,10 +197,9 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
             if (typeof mint !== 'function') throw new Error('Minter unavailable');
             window.__glintMint = mint;
             return it[1] || 0;
-            """, arguments: ["interpreter": interpreter, "program": program, "globalName": globalName,
-                             "jnn": PoTokenProvider.jnn, "apiKey": PoTokenProvider.apiKey,
-                             "requestKey": PoTokenProvider.requestKey],
-            in: nil, contentWorld: .page)
+            """, ["program": program, "globalName": globalName,
+                  "jnn": PoTokenProvider.jnn, "apiKey": PoTokenProvider.apiKey,
+                  "requestKey": PoTokenProvider.requestKey])
         let ttl = (lifetime as? NSNumber)?.doubleValue ?? 0
         minterExpiry = Date().addingTimeInterval(max(min(ttl > 0 ? ttl : 6 * 3600, 6 * 3600) - 300, 60))
         let s = Session(visitorData: visitor, dataSyncId: datasync)
