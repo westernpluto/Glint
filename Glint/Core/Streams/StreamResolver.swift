@@ -104,7 +104,7 @@ final class StreamResolver: @unchecked Sendable {
     /// streams without the account (as before signing in) and use the account only for the
     /// watch-history reports. Until the app restarts.
     /// Remembered across launches (only matters while signed in).
-    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams")
+    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams.v2")
     var anonymousStreams: Bool { cacheLock.withLock { _anonymousStreams } }
     func useAnonymousStreams(because reason: String = "Stream protection refuses the account's token") {
         let changed: Bool = cacheLock.withLock {
@@ -112,7 +112,7 @@ final class StreamResolver: @unchecked Sendable {
             if !_anonymousStreams { cache = [:] }   // links resolved with the account
             return !_anonymousStreams
         }
-        UserDefaults.standard.set(true, forKey: "anonymousStreams")
+        UserDefaults.standard.set(true, forKey: "anonymousStreams.v2")
         if changed { trace?("\(reason): streaming without the account (history still syncs)") }
     }
     private let penaltyLifetime: TimeInterval = 60 * 60
@@ -260,7 +260,7 @@ final class StreamResolver: @unchecked Sendable {
                     // back to the account's streams.
                     trace?("Without the account: \(error.localizedDescription) → back to streaming with it")
                     cacheLock.withLock { _anonymousStreams = false }
-                    UserDefaults.standard.set(false, forKey: "anonymousStreams")
+                    UserDefaults.standard.set(false, forKey: "anonymousStreams.v2")
                 }
             }
             guard var stream = built else {
@@ -366,10 +366,18 @@ final class StreamResolver: @unchecked Sendable {
         let tokens = [sd[Self.sabrTokenKey].string, sd[Self.sabrVideoTokenKey].string].compactMap { $0 }
         var session: SabrSession!
         for (attempt, token) in (tokens.isEmpty ? [nil] : tokens.map(Optional.some)).enumerated() {
-            let config = SabrConfig(videoId: details.id, url: url, ustreamerConfig: ustreamer,
+            let videoId = details.id
+            let visitorData = tube.visitorData
+            var config = SabrConfig(videoId: videoId, url: url, ustreamerConfig: ustreamer,
                                     clientNameId: client.clientId, clientVersion: client.clientVersion,
                                     poToken: token.flatMap(Self.base64URLData),
                                     userAgent: client.userAgent)
+            if client.isWebPlayback {
+                config.mintToken = {
+                    let t = try? await PoTokenProvider.shared.token(for: videoId, visitorData: visitorData, fresh: true)
+                    return t.flatMap(Self.base64URLData)
+                }
+            }
             session = SabrSession(config: config, audio: audio, videos: videoFormats)
             do {
                 try await SabrServer.shared.start()

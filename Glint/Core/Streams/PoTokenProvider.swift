@@ -31,8 +31,8 @@ final class PoTokenProvider: NSObject, WKNavigationDelegate {
     private var tokens: [String: (token: String, expires: Date)] = [:]
 
     /// A token for `binding` (normally the visitor id), from cache when still fresh.
-    func token(for binding: String, visitorData: String?) async throws -> String {
-        if let t = tokens[binding], t.expires > Date() { return t.token }
+    func token(for binding: String, visitorData: String?, fresh: Bool = false) async throws -> String {
+        if !fresh, let t = tokens[binding], t.expires > Date() { return t.token }
         try await ensureMinter(visitorData: visitorData)
         let value = try await webView?.callAsyncJavaScript("""
             const r = await window.__glintMint(new TextEncoder().encode(binding));

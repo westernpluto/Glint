@@ -103,6 +103,25 @@ struct ProtoMessage {
 
     func bool(_ field: Int) -> Bool { (uint(field) ?? 0) != 0 }
 
+    /// A repeated integer field, packed or not.
+    func ints(_ field: Int) -> [Int64] {
+        var out: [Int64] = []
+        for v in fields[field] ?? [] {
+            switch v {
+            case .varint(let x): out.append(Int64(bitPattern: x))
+            case .bytes(let d):
+                let b = [UInt8](d)
+                var i = 0, result: UInt64 = 0, shift: UInt64 = 0
+                while i < b.count {
+                    let x = b[i]; i += 1
+                    result |= UInt64(x & 0x7F) << shift
+                    if x & 0x80 == 0 { out.append(Int64(bitPattern: result)); result = 0; shift = 0 } else { shift += 7 }
+                }
+            }
+        }
+        return out
+    }
+
     func data(_ field: Int) -> Data? {
         if case .bytes(let d)? = fields[field]?.first { return d }
         return nil

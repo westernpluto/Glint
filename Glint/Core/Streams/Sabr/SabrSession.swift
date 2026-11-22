@@ -14,6 +14,9 @@ struct SabrConfig: Sendable {
     var clientVersion: String
     var poToken: Data?
     var userAgent: String
+    /// A new token when stream protection asks for one (pending / rejected): bound to the
+    /// video and freshly minted, as googlevideo does.
+    var mintToken: (@Sendable () async -> Data?)? = nil
 }
 
 /// YouTube's own streaming protocol (SABR, "server adaptive bitrate"), which is all some
@@ -47,6 +50,16 @@ actor SabrSession {
 
     private var url: URL
     private var cookie: Data?
+    private var poToken: Data?
+    /// SABR contexts the server handed out (type → value) and which of them to send back.
+    private var contexts: [Int: Data] = [:]
+    private var activeContexts: Set<Int> = []
+    /// The server's "wait before the next request" (NextRequestPolicy.backoff_time_ms).
+    private var backoffUntil = Date.distantPast
+    /// Stream protection: rejections so far, how many the server allows, and a token being minted.
+    private var protectionRejects = 0
+    private var protectionMaxRetries = 5
+    private var minting: Task<Void, Never>?
     private var requestNumber = 0
     private let started = Date()
     private var audioOnly = false
@@ -83,6 +96,7 @@ actor SabrSession {
         self.audio = audio
         self.videos = videos
         self.url = config.url
+        self.poToken = config.poToken
     }
 
     private func format(_ itag: Int) -> DashFormat? {
@@ -163,9 +177,13 @@ actor SabrSession {
 
     /// Waits until `key` is cached, starting (or redirecting) the request as needed.
     private func fetch(_ key: Key, atMs: Double) async throws {
-        for attempt in 0..<6 {
+        // Patient: the server may answer "not yet" (an empty answer, often with a back-off)
+        // for media ahead of where it thinks playback is. AVPlayer waits on its request.
+        let deadline = Date().addingTimeInterval(25)
+        var attempt = 0
+        while Date() < deadline {
             if isCached(key) { return }
-            let at = atMs + Double(attempt) * 200
+            let at = atMs + Double(min(attempt, 3)) * 200
             if inFlight == nil {
                 startRequest(atMs: at)
             } else if !inFlightCovers(at), !shouldWait(for: at) {
@@ -174,6 +192,12 @@ actor SabrSession {
             await waitFor(key)
             if isCached(key) { return }
             if attempt >= 1, let e = lastError, !(e is CancellationError) { throw e }
+            if !lastAnswerHadMedia, inFlight == nil {
+                // Nothing came: give the server a moment (at least its back-off) before asking again.
+                let wait = max(backoffUntil.timeIntervalSinceNow, 1)
+                try? await Task.sleep(nanoseconds: UInt64(min(wait, 5) * 1_000_000_000))
+            }
+            attempt += 1
         }
         let have = (cache.keys.filter { $0.itag == key.itag }.map(\.number).sorted())
         let detail = key.number == 0 ? "init of itag \(key.itag)"
@@ -219,8 +243,10 @@ actor SabrSession {
         inFlightStartMs = atMs
         inFlightVideo = audioOnly ? nil : currentVideo?.itag
         lastError = nil
+        let wait = backoffUntil.timeIntervalSinceNow
         inFlight = Task {
             do {
+                if wait > 0 { try await Task.sleep(nanoseconds: UInt64(min(wait, 10) * 1_000_000_000)) }
                 try await self.request(atMs: atMs)
             } catch {
                 await self.recordError(error, generation: generation)
@@ -280,6 +306,7 @@ actor SabrSession {
     }
 
     private func request(atMs playerTimeMs: Double) async throws {
+        if let minting { await minting.value }   // a fresh token is on its way
         for _ in 0..<4 {   // redirects
             let redirected = try await requestOnce(atMs: playerTimeMs)
             if !redirected { return }
@@ -331,8 +358,16 @@ actor SabrSession {
                 ci.int(16, config.clientNameId)
                 ci.string(17, config.clientVersion)
             }
-            ctx.bytes(2, config.poToken)
+            ctx.bytes(2, poToken)
             ctx.bytes(3, cookie)
+            // Contexts the server asked to get back, and the types it gave but we're holding.
+            for (type, value) in contexts.sorted(by: { $0.key < $1.key }) where activeContexts.contains(type) {
+                ctx.message(5) { c in
+                    c.int(1, type)
+                    c.bytes(2, value)
+                }
+            }
+            for type in contexts.keys.sorted() where !activeContexts.contains(type) { ctx.int(6, type) }
         }
 
         var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -387,6 +422,7 @@ actor SabrSession {
                 case 35:   // NEXT_REQUEST_POLICY
                     let policy = ProtoMessage(part.payload)
                     if let c = policy.data(7) { cookie = c }
+                    if let ms = policy.int(4), ms > 0 { backoffUntil = Date().addingTimeInterval(Double(ms) / 1000) }
                     let target = audioOnly ? policy.int(1) : policy.int(2)
                     if let target, target > 2_000 { readaheadMs = Double(target) }
                 case 43:   // SABR_REDIRECT
@@ -399,8 +435,27 @@ actor SabrSession {
                     throw SabrFailure.server("\(e.string(1) ?? "?") \(e.int(2) ?? 0)")
                 case 46:   // RELOAD_PLAYER_RESPONSE
                     throw SabrFailure.reload
-                case 58:   // STREAM_PROTECTION_STATUS (3 = rejected)
-                    if ProtoMessage(part.payload).int(1) == 3 { throw SabrFailure.protection }
+                case 57:   // SABR_CONTEXT_UPDATE
+                    let u = ProtoMessage(part.payload)
+                    guard let type = u.int(1).map(Int.init), let value = u.data(3), !value.isEmpty else { continue }
+                    if u.int(5) == 2, contexts[type] != nil { continue }   // keep existing
+                    contexts[type] = value
+                    if u.bool(4) { activeContexts.insert(type) }           // send by default
+                case 59:   // SABR_CONTEXT_SENDING_POLICY
+                    let p = ProtoMessage(part.payload)
+                    for t in p.ints(1) { activeContexts.insert(Int(t)) }
+                    for t in p.ints(2) { activeContexts.remove(Int(t)) }
+                    for t in p.ints(3) { contexts[Int(t)] = nil }
+                case 58:   // STREAM_PROTECTION_STATUS: 1 ok, 2 pending, 3 rejected
+                    let sps = ProtoMessage(part.payload)
+                    let status = sps.int(1) ?? 0
+                    if let m = sps.int(2), m > 0 { protectionMaxRetries = Int(m) }
+                    if status == 3 {
+                        protectionRejects += 1
+                        // Out of retries (or no way to get another token): give up on SABR.
+                        if protectionRejects >= protectionMaxRetries || config.mintToken == nil { throw SabrFailure.protection }
+                    }
+                    if status == 2 || status == 3 { remint() }
                 default:
                     break
                 }
@@ -413,6 +468,20 @@ actor SabrSession {
         }
         if let firstByte { SabrBandwidth.record(bytes: received, seconds: Date().timeIntervalSince(firstByte)) }
         return redirected && mediaCount == 0
+    }
+
+    /// A new token for the next requests (one at a time). The next request waits for it.
+    private func remint() {
+        guard minting == nil, let mint = config.mintToken else { return }
+        minting = Task {
+            let t = await mint()
+            self.tokenMinted(t)
+        }
+    }
+
+    private func tokenMinted(_ token: Data?) {
+        if let token { poToken = token }
+        minting = nil
     }
 
     /// The run of consecutive cached segments of `itag` starting at the one containing `ms`.
