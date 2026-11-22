@@ -433,12 +433,13 @@ struct LyricsView: View {
         let font: Font = compact ? .title3.weight(.bold) : .title.weight(.bold)
         switch state {
         case .current:
+            // No scale effect: it doesn't change the layout, so it spilled past the edge and
+            // into the next line.
             SingingLine(line: line, nextStart: nextStart(after: line), font: font)
-                .scaleEffect(1.03, anchor: .leading)
         case .past:
-            Text(line.text).font(font).foregroundStyle(.white.opacity(0.32))
+            WordsLine(text: line.text, font: font, opacity: 0.32)
         case .future:
-            Text(line.text).font(font).foregroundStyle(.white.opacity(0.5))
+            WordsLine(text: line.text, font: font, opacity: 0.5)
         }
     }
 
@@ -542,6 +543,25 @@ struct SingingLine: View {
     }
 }
 
+/// A line that isn't being sung, laid out word by word exactly like the one that is, so it
+/// wraps the same way and keeps its height when it becomes (or stops being) the current line.
+struct WordsLine: View {
+    var text: String
+    var font: Font
+    var opacity: Double
+
+    var body: some View {
+        FlowLayout(spacing: 7) {
+            ForEach(Array(text.split(separator: " ").enumerated()), id: \.offset) { _, w in
+                Text(w).font(font).foregroundStyle(.white.opacity(opacity))
+                    .lineLimit(1).minimumScaleFactor(0.5)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+    }
+}
+
 /// One word: dim, with the bright copy revealed left to right up to `fill`, soft leading edge.
 struct LyricWord: View {
     var text: String
@@ -568,6 +588,8 @@ struct LyricWord: View {
                         }
                 }
             }
-            .fixedSize()
+            // One line; a word wider than the screen shrinks to fit instead of being cut off.
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
     }
 }
