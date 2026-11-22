@@ -281,6 +281,7 @@ final class StreamResolver: @unchecked Sendable {
             }
             var json: JSON
             if client.fromWatchPage {
+                let asked = Date()
                 guard let data = await AccountPoTokenProvider.shared.pagePlayerResponse(videoId: videoId, sts: webPlayer?.sts),
                       let parsed = try? JSON.parse(data) else {
                     let why = await AccountPoTokenProvider.shared.lastPlayerError ?? "no response"
@@ -288,7 +289,7 @@ final class StreamResolver: @unchecked Sendable {
                     continue
                 }
                 json = parsed
-                trace?("\(client.key) (signed-in page): player response as the website gets it")
+                trace?("\(client.key) (signed-in page): player response as the website gets it (\(Int(Date().timeIntervalSince(asked) * 1000)) ms)")
             } else {
                 do {
                     json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
@@ -426,6 +427,7 @@ final class StreamResolver: @unchecked Sendable {
         let options = best.values.sorted(by: Self.order)
         let videoFormats = options.compactMap { if case .dash(let f) = $0.source { return f }; return nil }
         // The stream token; if stream protection refuses it, the video-bound one.
+        let sabrStart = Date()
         let tokens = [sd[Self.sabrTokenKey].string, sd[Self.sabrVideoTokenKey].string].compactMap { $0 }
         var session: SabrSession!
         for (attempt, token) in (tokens.isEmpty ? [nil] : tokens.map(Optional.some)).enumerated() {
@@ -481,7 +483,8 @@ final class StreamResolver: @unchecked Sendable {
                 return nil
             }
         }
-        trace?("\(client.key): SABR ok, \(options.count) qualities, audio itag \(audio.itag)")
+        let startup = await session.startupLog
+        trace?("\(client.key): SABR ok, \(options.count) qualities, audio itag \(audio.itag) (start-up \(Int(Date().timeIntervalSince(sabrStart) * 1000)) ms: \(startup.joined(separator: "; ")))")
         var stream = ResolvedStream(details: details, options: options, hlsURL: nil, manifest: nil,
                                     audio: audio, streamUserAgent: client.userAgent, isLive: false,
                                     captions: Captions.tracks(json))
@@ -787,6 +790,7 @@ final class StreamResolver: @unchecked Sendable {
     private func prepareWebFormats(_ json: JSON, client: ClientProfile, player: JSChallengeSolver.Player,
                                    videoToken: String?, accountBound: Bool,
                                    page: AccountPoTokenProvider.Session? = nil) async -> JSON {
+        let solveStart = Date()
         let keys = ["adaptiveFormats", "formats"]
         let pending = keys.flatMap { json.at("streamingData.\($0)").array.compactMap(PendingLink.init) }
         let hls = json.at("streamingData.hlsManifestUrl").string
@@ -834,7 +838,8 @@ final class StreamResolver: @unchecked Sendable {
                 trace?("\(client.key): PO token failed (\(error.localizedDescription))")
             }
         }
-        trace?("\(client.key): player \(player.id), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(!client.needsPoToken ? "not needed" : pot == nil ? "none" : "ok (\(bindingKind))")")
+        let solvedIn = Int(Date().timeIntervalSince(solveStart) * 1000)
+        trace?("\(client.key): player \(player.id) (\(solvedIn) ms incl. token), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(!client.needsPoToken ? "not needed" : pot == nil ? "none" : "ok (\(bindingKind))")")
 
         func rewrite(_ f: JSON) -> JSON {
             guard case .object(var o) = f, let link = PendingLink(f) else { return f }

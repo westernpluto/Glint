@@ -113,9 +113,16 @@ actor SabrSession {
     func prepare(video: DashFormat?, atMs: Double) async throws {
         if let video, format(video.itag) != nil { select(video) } else { audioOnly = true }
         lastPositionMs = atMs
+        recording = true
+        defer { recording = false }
         try await fetch(Key(itag: audio.itag, number: 0), atMs: atMs)
         guard inits[audio.itag] != nil else { throw lastError ?? SabrFailure.noMedia }
     }
+
+    /// What the start-up requests did (for Playback info): per request, time to the first
+    /// byte and to the end, media parts, redirect / back-off.
+    private var recording = false
+    private(set) var startupLog: [String] = []
 
     func setAudioOnly(_ value: Bool) { audioOnly = value }
 
@@ -397,6 +404,7 @@ actor SabrSession {
 
         var parser = UMPStreamParser()
         var firstByte: Date?
+        let sentAt = Date()
         var received = 0
         var pending: [Int: (itag: Int, isInit: Bool, number: Int, data: Data)] = [:]
         var redirected = false
@@ -490,6 +498,14 @@ actor SabrSession {
             lastAnswerNumbers = desc
         }
         if let firstByte { SabrBandwidth.record(bytes: received, seconds: Date().timeIntervalSince(firstByte)) }
+        if recording {
+            let fb = firstByte.map { Int($0.timeIntervalSince(sentAt) * 1000) }
+            var e = "#\(requestNumber - 1): first byte \(fb.map { "\($0)" } ?? "-") ms, done \(Int(Date().timeIntervalSince(sentAt) * 1000)) ms, \(mediaCount) media"
+            if redirected { e += ", redirect" }
+            if let backoff { e += ", back-off \(backoff) ms" }
+            if let protection { e += ", protection \(protection)" }
+            startupLog.append(e)
+        }
         return redirected && mediaCount == 0
     }
 
