@@ -158,19 +158,56 @@ enum Parser {
         let avatar = meta.first("avatarViewModel").flatMap { Parser.avatar($0["image"]) }
         let live = badge?.uppercased().contains("LIVE") == true
         let secondRow = rowTexts.count > 1 ? rowTexts[1] : []
+        // Rows are usually [channel] / [views, date], but on a channel's own page there is no
+        // channel row ([views, date] first): pick the parts by what they say.
+        let parts = rowTexts.flatMap { $0 }
+        let viewsPart = parts.first(where: isViewsText)
+        let datePart = parts.first(where: isDateText)
+        let first = rowTexts.first?.first
+        let channelName = first.flatMap { isViewsText($0) || isDateText($0) ? nil : $0 }
         return .video(VideoItem(
             id: contentId,
             title: title,
-            channelName: rowTexts.first?.first,
+            channelName: channelName,
             channelId: channelId,
             channelAvatar: avatar,
             thumbnail: image ?? URL(string: "https://i.ytimg.com/vi/\(contentId)/hqdefault.jpg"),
             duration: live ? nil : badge,
-            views: secondRow.first,
-            published: secondRow.count > 1 ? secondRow[1] : nil,
+            views: viewsPart ?? (channelName == nil ? nil : secondRow.first),
+            published: datePart ?? (channelName == nil ? nil : (secondRow.count > 1 ? secondRow[1] : nil)),
             isLive: live,
             watchedPercent: r["contentImage"].first("thumbnailOverlayProgressBarViewModel")?["startPercent"].double
         ))
+    }
+
+    static func isViewsText(_ s: String) -> Bool {
+        let l = s.lowercased()
+        return l.contains("view") || l.contains("watching")
+    }
+
+    static func isDateText(_ s: String) -> Bool {
+        let l = s.lowercased()
+        return l.contains(" ago") || l.hasPrefix("streamed") || l.hasPrefix("premiere") || l.hasPrefix("scheduled")
+    }
+
+    /// "3 hours ago", "Streamed 2 days ago" → seconds ago (approximate); nil if not a date.
+    static func ageSeconds(_ published: String?) -> Double? {
+        guard let p = published?.lowercased(),
+              let m = p.range(of: #"(\d+)\s*(second|minute|hour|day|week|month|year)"#, options: .regularExpression)
+        else { return nil }
+        let match = String(p[m])
+        let n = Double(match.prefix { $0.isNumber }) ?? 0
+        let unit: Double
+        switch true {
+        case match.contains("second"): unit = 1
+        case match.contains("minute"): unit = 60
+        case match.contains("hour"): unit = 3_600
+        case match.contains("day"): unit = 86_400
+        case match.contains("week"): unit = 604_800
+        case match.contains("month"): unit = 2_629_800
+        default: unit = 31_557_600
+        }
+        return n * unit
     }
 
     static func channel(_ r: JSON) -> ChannelItem? {

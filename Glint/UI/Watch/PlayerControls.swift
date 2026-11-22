@@ -238,6 +238,8 @@ struct PlayerOverlay: View {
     @State private var seekTotal = 0
     @State private var lastTap: TapRecord?
     @State private var flashTask: Task<Void, Never>?
+    /// Finger held on the video (after a short press): 2× until it lifts.
+    @GestureState private var holding = false
 
     private struct TapRecord { var side: Int; var time: Date; var seeking: Bool }
 
@@ -246,6 +248,28 @@ struct PlayerOverlay: View {
             HStack(spacing: 0) {
                 tapZone(-10)
                 tapZone(10)
+            }
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .updating($holding) { value, state, _ in
+                        if case .second(true, _) = value { state = true }
+                    }
+            )
+            .onChange(of: holding) { _, h in player.setHoldBoost(h) }
+
+            if player.holdBoost {
+                Label("2×", systemImage: "forward.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .glassEffect(.regular, in: .capsule)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 14)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    .accessibilityLabel("Playing at double speed")
             }
 
             if visible { controls.transition(.opacity) }
@@ -328,6 +352,8 @@ struct PlayerOverlay: View {
             .animation(.snappy, value: player.manualSegment?.id)
         }
         .animation(.easeInOut(duration: 0.2), value: visible)
+        .animation(.snappy(duration: 0.2), value: player.holdBoost)
+        .sensoryFeedback(.impact(weight: .light), trigger: player.holdBoost)
         .onAppear { scheduleHide() }
         .onChange(of: player.isPlaying) { _, playing in
             if playing { scheduleHide() } else { visible = true; hideTask?.cancel() }

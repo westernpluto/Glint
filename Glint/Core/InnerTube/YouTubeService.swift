@@ -66,6 +66,15 @@ struct ChannelPage {
     /// nil when signed out or unknown.
     var subscribed: Bool? = nil
     var feed: FeedPage
+    /// The tab's sort choices (Latest / Popular / Oldest), each a continuation to load.
+    var sorts: [ChannelSort] = []
+}
+
+struct ChannelSort: Hashable, Identifiable {
+    var title: String
+    var token: String
+    var selected: Bool
+    var id: String { title }
 }
 
 /// Where to fetch the next page of a feed.
@@ -157,7 +166,23 @@ final class YouTubeService: @unchecked Sendable {
     func subscriptions() async throws -> FeedPage {
         guard tube.isSignedIn else { throw InnerTubeError.notSignedIn }
         let json = try await tube.call("browse", body: ["browseId": "FEsubscriptions"])
-        return Parser.feed(json, hideShorts: hideShorts)
+        var page = Parser.feed(json, hideShorts: hideShorts)
+        page.items = Self.newestFirst(page.items)
+        return page
+    }
+
+    /// Live now first, then by upload time, newest first; items without a date keep their place
+    /// relative to each other at the end.
+    static func newestFirst(_ items: [FeedItem]) -> [FeedItem] {
+        items.enumerated().sorted { a, b in
+            func key(_ i: FeedItem) -> Double {
+                guard case .video(let v) = i else { return .infinity }
+                if v.isLive { return -1 }
+                return Parser.ageSeconds(v.published) ?? .infinity
+            }
+            let ka = key(a.element), kb = key(b.element)
+            return ka != kb ? ka < kb : a.offset < b.offset
+        }.map(\.element)
     }
 
     /// Channels you subscribe to (signed in).
@@ -262,7 +287,45 @@ final class YouTubeService: @unchecked Sendable {
                            banner: banner,
                            subscribers: subs,
                            subscribed: subscribed,
-                           feed: feed)
+                           feed: feed,
+                           sorts: Self.channelSorts(json))
+    }
+
+    /// The Latest / Popular / Oldest chips above a channel's videos.
+    private static func channelSorts(_ json: JSON) -> [ChannelSort] {
+        let models = json.findAll("chipViewModel").compactMap { c -> ChannelSort? in
+            guard let title = c["text"].string, let token = c.first("continuationCommand")?["token"].string else { return nil }
+            return ChannelSort(title: title, token: token, selected: c["selected"].bool ?? false)
+        }
+        if !models.isEmpty { return models }
+        return json.findAll("chipCloudChipRenderer").compactMap { c -> ChannelSort? in
+            guard let title = c["text"].text, let token = c.first("continuationCommand")?["token"].string else { return nil }
+            return ChannelSort(title: title, token: token, selected: c["isSelected"].bool ?? false)
+        }
+    }
+
+    /// A channel's videos in another order (a sort chip's continuation).
+    func channelSorted(_ id: String, name: String?, token: String) async throws -> FeedPage {
+        let json = try await tube.call("browse", body: ["continuation": token])
+        return Self.owned(Parser.feed(json, hideShorts: hideShorts), id: id, name: name)
+    }
+
+    /// Search within one channel (its search tab).
+    func channelSearch(_ id: String, name: String?, query: String) async throws -> FeedPage {
+        let json = try await tube.call("browse", body: ["browseId": id, "params": "EgZzZWFyY2g%3D", "query": query])
+        return Self.owned(Parser.feed(json["contents"], hideShorts: false), id: id, name: name)
+    }
+
+    /// Videos on a channel's pages often leave out the channel: fill it in.
+    private static func owned(_ page: FeedPage, id: String, name: String?) -> FeedPage {
+        var page = page
+        page.items = page.items.map { item in
+            guard case .video(var v) = item else { return item }
+            if v.channelName == nil { v.channelName = name }
+            if v.channelId == nil { v.channelId = id }
+            return .video(v)
+        }
+        return page
     }
 
     // MARK: Watch page

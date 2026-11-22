@@ -791,6 +791,15 @@ final class PlayerController {
 
     func togglePlay() { isPlaying ? pause() : resume() }
 
+    /// Press and hold the video: 2× while held, back to the chosen speed on release.
+    private(set) var holdBoost = false
+    func setHoldBoost(_ on: Bool) {
+        guard on != holdBoost else { return }
+        if on, !isPlaying { return }
+        holdBoost = on
+        if on { player.rate = max(2, rate) } else if isPlaying { player.rate = rate }
+    }
+
     func resume() {
         // After an error, "play" means "try again".
         if loadError != nil, current != nil { retry(); return }
