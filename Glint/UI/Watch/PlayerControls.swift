@@ -517,19 +517,6 @@ struct ElapsedLabel: View {
     }
 }
 
-struct ProgressLine: View {
-    @Environment(PlayerController.self) private var player
-
-    var body: some View {
-        GeometryReader { g in
-            Capsule().fill(.tint)
-                .frame(width: player.duration > 0 ? g.size.width * min(max(player.currentTime / player.duration, 0), 1) : 0,
-                       height: 2)
-        }
-        .frame(height: 2)
-    }
-}
-
 // MARK: Chapters
 
 /// The chapter the playhead is in; tap for the full list.

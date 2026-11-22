@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The minimized video: just the picture, floating in a corner above the app (videos only;
-/// music and audio-only keep the bar). Tap to open, double-tap to play / pause, drag to
-/// another corner, fling it off the side to stop. Long-press for the same actions.
+/// The minimized video: the picture floating in a corner above the app (videos only; music
+/// and audio only get the floating bar), with play / pause and close buttons. Tap to open,
+/// drag to another corner, fling it off the side to stop. Long-press for the same actions.
 struct FloatingMiniPlayer: View {
     @Environment(PlayerController.self) private var player
     @Environment(AppRouter.self) private var router
@@ -31,8 +31,18 @@ struct FloatingMiniPlayer: View {
                 .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
                 .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
                 .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
-                .onTapGesture(count: 2) { player.togglePlay() }
+                // Single tap only (a double-tap gesture made every tap wait to see if a second
+                // one followed); play / pause has its own button.
                 .onTapGesture { expand() }
+                .overlay(alignment: .topTrailing) {
+                    miniButton("xmark", size: 26, label: "Close") { player.close() }
+                        .padding(6)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    miniButton(player.isPlaying ? "pause.fill" : "play.fill", size: 34,
+                               label: player.isPlaying ? "Pause" : "Play") { player.togglePlay() }
+                        .padding(6)
+                }
                 .contextMenu {
                     Button { expand() } label: { Label("Open", systemImage: "arrow.up.left.and.arrow.down.right") }
                     Button { player.togglePlay() } label: {
@@ -65,6 +75,21 @@ struct FloatingMiniPlayer: View {
         withTransaction(t) { player.presentation = .expanded }
     }
 
+    private func miniButton(_ symbol: String, size: CGFloat, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size * 0.42, weight: .bold))
+                .foregroundStyle(.white)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: size, height: size)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .padding(4)                       // larger hit area than it looks
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
     private var video: some View {
         ZStack {
             Color.black
@@ -72,12 +97,6 @@ struct FloatingMiniPlayer: View {
             PlayerSurface(primary: true)
             if player.isLoading || player.isBuffering {
                 ProgressView().tint(.white)
-            } else if !player.isPlaying {
-                Image(systemName: "play.fill")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .glassEffect(.regular, in: .circle)
             }
         }
     }
@@ -119,8 +138,15 @@ struct FloatingMiniPlayer: View {
             }
             return
         }
-        // Otherwise settle in the nearest corner to where it was heading.
-        let end = CGPoint(x: home.x + v.predictedEndTranslation.width, y: home.y + v.predictedEndTranslation.height)
+        // A small nudge stays put; otherwise the corner nearest to where it was let go (with a
+        // little momentum — the full projected fling could carry it to the opposite corner).
+        guard hypot(v.translation.width, v.translation.height) > 48 else {
+            withAnimation(.smooth(duration: 0.25)) { drag = .zero }
+            return
+        }
+        let momentum = 0.25
+        let end = CGPoint(x: home.x + v.translation.width + (v.predictedEndTranslation.width - v.translation.width) * momentum,
+                          y: home.y + v.translation.height + (v.predictedEndTranslation.height - v.translation.height) * momentum)
         let target = Corner.allCases.min { a, b in
             dist(position(for: a, in: g, size: size), end) < dist(position(for: b, in: g, size: size), end)
         } ?? corner

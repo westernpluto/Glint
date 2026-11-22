@@ -158,15 +158,38 @@ enum MusicParser {
 
     /// Up-next queue from the `next` endpoint (radio / album / playlist).
     static func queue(_ root: JSON) -> [MusicItem] {
-        root.findAll("playlistPanelVideoRenderer").compactMap { r in
-            guard let vid = r["videoId"].string else { return nil }
-            return MusicItem(kind: .song,
-                             title: r["title"].text ?? "",
-                             subtitle: r["shortBylineText"].text ?? r["longBylineText"].text,
-                             thumbnail: Parser.upscale(Parser.thumbnail(r["thumbnail"])),
-                             videoId: vid,
-                             playlistId: r.at("navigationEndpoint.watchEndpoint.playlistId").string,
-                             duration: r["lengthText"].text)
+        // Signed in, a music video comes wrapped with its audio-only "song" counterpart, which
+        // has the real album cover: keep the entry that's playing, with the square art.
+        let rows = root.findAll("playlistPanelRenderer").first?["contents"].array ?? []
+        let items: [MusicItem] = rows.compactMap { row in
+            if !row["playlistPanelVideoRenderer"].isNull { return queueItem(row["playlistPanelVideoRenderer"], art: nil) }
+            let w = row["playlistPanelVideoWrapperRenderer"]
+            guard !w.isNull else { return nil }
+            let primary = w.at("primaryRenderer.playlistPanelVideoRenderer")
+            let counterparts = w["counterpart"].array.map { $0.at("counterpartRenderer.playlistPanelVideoRenderer") }
+            let art = counterparts.compactMap { Parser.thumbnail($0["thumbnail"]) }.first(where: isAlbumArt)
+            return queueItem(primary, art: art)
         }
+        if !items.isEmpty { return items }
+        return root.findAll("playlistPanelVideoRenderer").compactMap { queueItem($0, art: nil) }
+    }
+
+    private static func queueItem(_ r: JSON, art: URL?) -> MusicItem? {
+        guard let vid = r["videoId"].string else { return nil }
+        var thumb = Parser.thumbnail(r["thumbnail"])
+        if let art, !(thumb.map(isAlbumArt) ?? false) { thumb = art }
+        return MusicItem(kind: .song,
+                         title: r["title"].text ?? "",
+                         subtitle: r["shortBylineText"].text ?? r["longBylineText"].text,
+                         thumbnail: Parser.upscale(thumb),
+                         videoId: vid,
+                         playlistId: r.at("navigationEndpoint.watchEndpoint.playlistId").string,
+                         duration: r["lengthText"].text)
+    }
+
+    /// Square album covers live on Google's image hosts; video frames on ytimg.
+    static func isAlbumArt(_ url: URL) -> Bool {
+        let h = url.host ?? ""
+        return h.contains("googleusercontent.com") || h.contains("ggpht.com")
     }
 }

@@ -322,7 +322,13 @@ final class PlayerController {
                 let queued = Array(self.queue[(self.index + 1)...])
                 let known = Set(queued.map(\.videoId)).union([vid])
                 let extra = more.compactMap(QueueItem.init(music:)).filter { !known.contains($0.videoId) }
-                self.queue = [self.queue[self.index]] + queued + extra
+                var now = self.queue[self.index]
+                // The radio's copy of this song may carry its album cover (not a video frame).
+                if let art = more.first(where: { $0.videoId == vid })?.thumbnail, MusicParser.isAlbumArt(art),
+                   !(now.thumbnail.map(MusicParser.isAlbumArt) ?? false) {
+                    now.thumbnail = art
+                }
+                self.queue = [now] + queued + extra
                 self.index = 0
             }
         }

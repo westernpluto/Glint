@@ -63,7 +63,7 @@ run_scene() {  # scene [orientation]
 }
 
 # The iPhone Duo outer display ("primary").
-for scene in home watch watchtest nowplaying lyrics mini library search; do
+for scene in home watch watchtest nowplaying lyrics mini musicbar library search; do
   run_scene "$scene"
   shot primary "outer-$scene"
 done

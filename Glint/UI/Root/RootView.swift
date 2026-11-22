@@ -15,6 +15,7 @@ struct RootView: View {
         // Videos minimize to a floating picture; music / audio only to the bar.
         let floatingMini = player.presentation == .mini && player.current != nil
             && player.current?.isMusic != true && !player.audioOnly
+        let musicBar = player.presentation == .mini && player.current != nil && !floatingMini
         GeometryReader { geo in
             ZStack {
                 TabView(selection: section) {
@@ -36,8 +37,11 @@ struct RootView: View {
                 }
                 .tabViewStyle(.sidebarAdaptable)
                 .tabBarMinimizeBehavior(.onScrollDown)
-                .tabViewBottomAccessory(isEnabled: player.presentation == .mini && player.current != nil && !floatingMini) {
-                    MiniPlayerAccessory()
+
+                if musicBar {
+                    FloatingMusicBar()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(1)
                 }
 
                 if floatingMini {
@@ -88,12 +92,20 @@ final class AppRouter {
 private struct SectionStack: View {
     var section: AppSection
     @Binding var showSettings: Bool
+    @Environment(PlayerController.self) private var player
 
     var body: some View {
+        // Videos float in a corner; music / audio only gets the bar, which content scrolls clear of.
+        let musicBar = player.presentation == .mini && player.current != nil
+            && (player.current?.isMusic == true || player.audioOnly)
         NavigationStack {
             content
                 .withRoutes()
                 .toolbar { AccountToolbarItem(showSettings: $showSettings) }
+        }
+        // On the stack (so pushed pages get it too); measured below without it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if musicBar { Color.clear.frame(height: FloatingMusicBar.height + 12).allowsHitTesting(false) }
         }
         .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: { insets in
             if AppRouter.shared.section == section { AppRouter.shared.contentInsets = insets }
@@ -168,6 +180,11 @@ enum ScreenshotDriver {
             let id = d.string(forKey: "GlintVideo") ?? "FGBhQbmPwH8"
             PlayerController.shared.playMusic(MusicItem(kind: .song, title: "One More Time", subtitle: "Daft Punk", videoId: id))
             PlayerController.shared.presentation = .expanded
+        case "musicbar":
+            section.wrappedValue = .music
+            let id = d.string(forKey: "GlintVideo") ?? "FGBhQbmPwH8"
+            PlayerController.shared.playMusic(MusicItem(kind: .song, title: "One More Time", subtitle: "Daft Punk", videoId: id))
+            PlayerController.shared.presentation = .mini
         case "mini":
             let id = d.string(forKey: "GlintVideo") ?? "aqz-KE-bpKQ"
             PlayerController.shared.play(VideoItem(id: id, title: "Big Buck Bunny 60fps 4K", channelName: "Blender"))

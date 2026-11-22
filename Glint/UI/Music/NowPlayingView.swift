@@ -75,7 +75,7 @@ struct NowPlayingView: View {
         ZStack {
             Color.black
             LinearGradient(colors: palette ?? [Color(white: 0.22), Color(white: 0.1)], startPoint: .top, endPoint: .bottom)
-            RemoteImage(url: player.current?.thumbnail)
+            RemoteImage(url: Artwork.sharp(player.current?.thumbnail, size: 240), fallback: player.current?.thumbnail)
                 .blur(radius: 90)
                 .opacity(0.35)
                 .saturation(1.4)
@@ -148,7 +148,7 @@ struct NowPlayingView: View {
             if player.audioOnly {
                 Color.clear
                     .aspectRatio(1, contentMode: .fit)
-                    .overlay { RemoteImage(url: player.current?.thumbnail) }
+                    .overlay { RemoteImage(url: Artwork.sharp(player.current?.thumbnail, size: 1200), fallback: player.current?.thumbnail) }
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .shadow(color: .black.opacity(0.28), radius: 28, y: 14)
                     .scaleEffect(player.isPlaying ? 1 : 0.92)
@@ -317,65 +317,6 @@ struct QueueList: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: Mini player
-
-/// Lives in the tab view's bottom accessory, so the system places it correctly with a
-/// horizontal tab bar, a minimized tab bar, or the vertical bars on iPhone Duo.
-struct MiniPlayerAccessory: View {
-    @Environment(PlayerController.self) private var player
-    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
-
-    var body: some View {
-        if let item = player.current {
-            HStack(spacing: 12) {
-                Color.clear
-                    .frame(width: item.isMusic ? 34 : 54, height: 34)
-                    .overlay { RemoteImage(url: item.thumbnail) }
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(player.details?.title ?? item.title)
-                        .font(.subheadline.weight(.semibold)).lineLimit(1)
-                    if placement != .inline {
-                        Text(item.subtitle ?? player.details?.channelName ?? "")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 4)
-                Button { player.togglePlay() } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title3)
-                        .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 36, height: 36)
-                }
-                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-                if placement != .inline {
-                    Button { player.next() } label: {
-                        Image(systemName: "forward.fill").frame(width: 32, height: 36)
-                    }
-                    .accessibilityLabel("Next")
-                    Button { player.close() } label: {
-                        Image(systemName: "xmark")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 32, height: 36)
-                    }
-                    .accessibilityLabel("Stop playing")
-                }
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .overlay(alignment: .bottom) {
-                ProgressLine().padding(.horizontal, 18).opacity(placement == .inline ? 0 : 1)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { player.presentation = .expanded }
-            .contextMenu {
-                Button(role: .destructive) { player.close() } label: { Label("Stop playing", systemImage: "xmark") }
-            }
-        }
     }
 }
 

@@ -24,7 +24,9 @@ final class ImagePipeline: @unchecked Sendable {
         let task: Task<UIImage?, Never> = lock.withLock {
             if let running = inflight[url] { return running }
             let t = Task.detached(priority: .utility) { () -> UIImage? in
-                guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+                guard let (data, resp) = try? await URLSession.shared.data(from: url),
+                      (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true
+                else { return nil }
                 return ImagePipeline.decode(data)
             }
             inflight[url] = t
@@ -54,12 +56,15 @@ final class ImagePipeline: @unchecked Sendable {
 struct RemoteImage: View {
     var url: URL?
     var contentMode: ContentMode = .fill
+    /// Shown instead when `url` can't be loaded (e.g. a hi-res size that doesn't exist).
+    var fallback: URL? = nil
     @State private var loaded: UIImage?
     @State private var loadedURL: URL?
 
     var body: some View {
         // Cache hits render synchronously, so scrolling back never flashes a placeholder.
         let image = (loadedURL == url ? loaded : nil) ?? url.flatMap { ImagePipeline.shared.cached($0) }
+            ?? fallback.flatMap { ImagePipeline.shared.cached($0) }
         ZStack {
             if let image {
                 Image(uiImage: image)
@@ -73,7 +78,8 @@ struct RemoteImage: View {
         .animation(.easeOut(duration: 0.2), value: image != nil)
         .task(id: url) {
             guard let url, ImagePipeline.shared.cached(url) == nil else { return }
-            let img = await ImagePipeline.shared.image(url)
+            var img = await ImagePipeline.shared.image(url)
+            if img == nil, let fallback { img = await ImagePipeline.shared.image(fallback) }
             guard !Task.isCancelled else { return }
             loaded = img
             loadedURL = url
