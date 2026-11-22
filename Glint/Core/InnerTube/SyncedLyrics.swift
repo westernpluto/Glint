@@ -57,15 +57,15 @@ enum SyncedLyrics {
             let key = normalized(r.text)
             guard key.count >= 6 else { continue }
             // The first unused LRCLIB line starting the same way, near where this one is.
-            if let (i, l) = lines.enumerated().first(where: { i, l in
+            if let match = lines.enumerated().first(where: { i, l in
                 !used.contains(i) && abs(l.start - r.start) < 30 && {
                     let k = normalized(l.text)
                     let n = min(k.count, key.count, 14)
                     return n >= 6 && k.prefix(n) == key.prefix(n)
                 }()
             }) {
-                used.insert(i)
-                diffs.append(r.start - l.start)
+                used.insert(match.offset)
+                diffs.append(r.start - match.element.start)
             }
         }
         guard diffs.count >= 3 else { return nil }
