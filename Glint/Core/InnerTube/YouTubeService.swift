@@ -398,7 +398,14 @@ final class YouTubeService: @unchecked Sendable {
     }
 
     struct Lyrics: Sendable {
-        struct Line: Sendable, Hashable { var text: String; var start: Double; var end: Double }
+        struct Line: Sendable, Hashable {
+            struct Word: Sendable, Hashable { var text: String; var start: Double }
+            var text: String
+            var start: Double
+            var end: Double
+            /// Each word's start, when the source times words (else spread over the line).
+            var words: [Word]? = nil
+        }
         /// Timed lines (seconds), when YouTube Music has synced lyrics for the song.
         var lines: [Line]
         /// Plain text otherwise.
@@ -425,16 +432,49 @@ final class YouTubeService: @unchecked Sendable {
                 return Lyrics.Line(text: text, start: s / 1000, end: e / 1000)
             }
             let source = data["sourceMessage"].text
-            if !lines.isEmpty { return Lyrics(lines: lines, text: nil, source: source) }
+            if !lines.isEmpty {
+                // Finer (sometimes word-by-word) timings from LRCLIB, lined up with these.
+                if let t = Self.track(videoId: videoId, in: next),
+                   let better = await SyncedLyrics.lookup(title: t.title, artist: t.artist, duration: t.length, reference: lines) {
+                    return Lyrics(lines: better, text: nil, source: [source, "Timing from LRCLIB"].compactMap { $0 }.joined(separator: " · "))
+                }
+                return Lyrics(lines: lines, text: nil, source: source)
+            }
             let plain = data["timedLyricsData"].array.compactMap { $0["lyricLine"].string }.joined(separator: "\n")
-            if !plain.isEmpty { return Lyrics(lines: [], text: plain, source: source) }
+            if !plain.isEmpty {
+                if let synced = await Self.lrclibOnly(videoId: videoId, next: next) { return synced }
+                return Lyrics(lines: [], text: plain, source: source)
+            }
         }
+
+        if let synced = await Self.lrclibOnly(videoId: videoId, next: next) { return synced }
 
         guard let page = try? await tube.call("browse", client: .webRemix, body: ["browseId": id]),
               let shelf = page.first("musicDescriptionShelfRenderer"),
               let text = shelf["description"].text, !text.isEmpty
         else { return nil }
         return Lyrics(lines: [], text: text, source: shelf["footer"].text)
+    }
+
+    /// No timings from YouTube: LRCLIB's, if its track length matches this one.
+    private static func lrclibOnly(videoId: String, next: JSON) async -> Lyrics? {
+        guard let t = track(videoId: videoId, in: next),
+              let lines = await SyncedLyrics.lookup(title: t.title, artist: t.artist, duration: t.length, reference: [])
+        else { return nil }
+        return Lyrics(lines: lines, text: nil, source: "Lyrics from LRCLIB")
+    }
+
+    /// Title, main artist and length of the song from its `next` response.
+    private static func track(videoId: String, in next: JSON) -> (title: String, artist: String?, length: Double?)? {
+        guard let r = next.findAll("playlistPanelVideoRenderer").first(where: { $0["videoId"].string == videoId }),
+              let title = r["title"].text else { return nil }
+        let artist = r.at("longBylineText.runs.0.text").string ?? r.at("shortBylineText.runs.0.text").string
+        let length = r["lengthText"].text.flatMap { t -> Double? in
+            let parts = t.split(separator: ":").compactMap { Double($0) }
+            guard !parts.isEmpty else { return nil }
+            return parts.reduce(0) { $0 * 60 + $1 }
+        }
+        return (title, artist, length)
     }
 
     /// Radio / album / playlist queue for a track.

@@ -56,6 +56,11 @@ struct RootView: View {
                         .zIndex(2)
                 }
             }
+            .background {
+                Color.clear
+                    .ignoresSafeArea()
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { router.windowSize = $0 }
+            }
             .animation(.spring(response: 0.4, dampingFraction: 0.9), value: player.presentation)
             .environment(\.screenClass, ScreenClass(horizontalSizeClass))
             .environment(\.containerSize, geo.size)
@@ -79,6 +84,8 @@ final class AppRouter {
     /// Room the bars take around the current tab's content (nav bar, tab bar — at the bottom,
     /// or the vertical bar on the side), measured from inside it; keeps floating views clear.
     var contentInsets = EdgeInsets()
+    /// The whole window (safe areas included), for views placed in window coordinates.
+    var windowSize = CGSize.zero
     var searchScope: SearchScope {
         didSet { UserDefaults.standard.set(searchScope.rawValue, forKey: "searchScope") }
     }

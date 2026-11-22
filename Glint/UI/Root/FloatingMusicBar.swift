@@ -8,6 +8,10 @@ struct FloatingMusicBar: View {
     @Environment(PlayerController.self) private var player
     @Environment(AppRouter.self) private var router
     @State private var drag: CGSize = .zero
+    /// Drawn by the player while it shrinks into / grows out of the bar (not interactive).
+    var preview = false
+
+    init(preview: Bool = false) { self.preview = preview }
 
     static let height: CGFloat = 68
 
@@ -28,6 +32,15 @@ struct FloatingMusicBar: View {
             }
         }
         .ignoresSafeArea()
+        .allowsHitTesting(!preview)
+    }
+
+    /// Grows the player out of the bar (the player animates from the bar's frame).
+    private func open() {
+        player.expandFromMini = true
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { player.presentation = .expanded }
     }
 
     /// Bottom of the content area, clear of a bottom tab bar or a side (vertical) one.
@@ -90,14 +103,14 @@ struct FloatingMusicBar: View {
         .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .onTapGesture { player.presentation = .expanded }
+        .onTapGesture { open() }
         .contextMenu {
-            Button { player.presentation = .expanded } label: { Label("Open", systemImage: "chevron.up") }
+            Button { open() } label: { Label("Open", systemImage: "chevron.up") }
             Button { player.previous() } label: { Label("Previous", systemImage: "backward.fill") }
             Button(role: .destructive) { player.close() } label: { Label("Stop playing", systemImage: "xmark") }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityAction(named: "Open") { player.presentation = .expanded }
+        .accessibilityAction(named: "Open") { open() }
         .accessibilityAction(named: "Stop playing") { player.close() }
     }
 
@@ -106,7 +119,7 @@ struct FloatingMusicBar: View {
         let pdy = v.predictedEndTranslation.height, pdx = v.predictedEndTranslation.width
         if abs(dy) > abs(dx) {
             if dy < -30 || pdy < -120 {
-                player.presentation = .expanded                  // swipe up: open
+                open()                  // swipe up: open
             } else if dy > 60 || pdy > 220 {
                 withAnimation(.easeIn(duration: 0.15)) { drag.height = 200 }
                 Task { @MainActor in

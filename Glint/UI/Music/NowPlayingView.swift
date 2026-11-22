@@ -467,13 +467,48 @@ struct SingingLine: View {
     private struct Word { var text: String; var from: Double; var to: Double }
 
     private var words: [Word] {
-        let parts = line.text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-        let weights = parts.map { Double(Self.syllables($0)) + 0.35 }
-        let total = max(weights.reduce(0, +), 0.001)
         // Sung part of the line: up to the next line, but not into a long gap after it.
         let end = min(line.end, nextStart ?? line.end)
-        let length = max(end - line.start, 0.2)
-        var t = line.start
+        if let timed = line.words, !timed.isEmpty { return Self.spread(timed, end: end) }
+        let parts = line.text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        return Self.estimate(parts, from: line.start, to: end)
+    }
+
+    /// Words with their own start times. Several words under one stamp share its time; the last
+    /// word lasts until the line ends, but not for ages (a long gap after it isn't singing).
+    private static func spread(_ timed: [YouTubeService.Lyrics.Line.Word], end: Double) -> [Word] {
+        var out: [Word] = []
+        var i = 0
+        while i < timed.count {
+            var j = i
+            while j + 1 < timed.count, timed[j + 1].start - timed[i].start < 0.01 { j += 1 }
+            let from = timed[i].start
+            let to: Double
+            if j + 1 < timed.count {
+                to = timed[j + 1].start
+            } else {
+                let syll = timed[i...j].reduce(0.0) { $0 + Double(syllables($1.text)) }
+                to = max(min(end, from + syll * 0.55 + 0.9), from + 0.2)
+            }
+            out += estimate(timed[i...j].map(\.text), from: from, to: to)
+            i = j + 1
+        }
+        return out
+    }
+
+    /// No word timings: share the time by estimated syllables. The last word of a line is
+    /// usually held and a comma or dash is a breath, so those get a little more; and a line that
+    /// lasts far longer than its words need ends early instead of crawling.
+    private static func estimate(_ parts: [String], from start: Double, to end: Double) -> [Word] {
+        guard !parts.isEmpty else { return [] }
+        let syll = parts.map { Double(syllables($0)) }
+        var weights = syll.map { $0 + 0.35 }
+        for (k, p) in parts.enumerated() where p.last.map({ ",;-—–".contains($0) }) == true { weights[k] += 0.35 }
+        weights[weights.count - 1] += 0.8
+        let total = max(weights.reduce(0, +), 0.001)
+        let natural = syll.reduce(0, +) * 0.5 + 1.6
+        let length = max(min(end - start, natural), 0.2)
+        var t = start
         return zip(parts, weights).map { text, w in
             let d = length * w / total
             defer { t += d }

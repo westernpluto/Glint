@@ -7,6 +7,7 @@ struct PlayerScreen: View {
     @Environment(PlayerController.self) private var player
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.containerSize) private var container
+    @Environment(AppRouter.self) private var router
     @State private var drag: CGFloat = 0
     /// 1 while growing out of the floating mini player, animated to 0 on appear.
     @State private var expanding: CGFloat = PlayerController.shared.expandFromMini ? 1 : 0
@@ -16,6 +17,7 @@ struct PlayerScreen: View {
         let videoMini = !isMusic && !player.audioOnly
         // A short display (outer screen held sideways) goes straight to an immersive player.
         let immersive = player.isFullscreen || (verticalSizeClass == .compact && videoMini)
+        let musicProgress = max(min(drag / Self.musicCollapseDistance(container), 1), expanding)
         Group {
             if isMusic || player.audioOnly {
                 Group {
@@ -28,14 +30,27 @@ struct PlayerScreen: View {
                             }
                     }
                 }
-                // Follows the finger like an iOS card: slides, shrinks a little and rounds its
-                // corners. The mask covers the whole screen (incl. the home-indicator strip).
+                .offset(y: Self.musicCollapseDistance(container) * musicProgress)   // content rides with the card's top
+                // Shrinks into the floating bar as you drag: the top edge follows the finger,
+                // the sides and bottom close in on the bar's frame, and near the end the card
+                // fades to reveal the bar itself (drawn here at the same place), so letting go
+                // swaps in the real bar without a jump. Growing back out runs the same path.
                 .mask {
-                    RoundedRectangle(cornerRadius: min(max(drag, 0) / 12, 34), style: .continuous)
-                        .ignoresSafeArea()
+                    GeometryReader { g in
+                        let r = Self.musicCard(progress: musicProgress, window: g.size, insets: router.contentInsets)
+                        RoundedRectangle(cornerRadius: min(musicProgress * 120, 22), style: .continuous)
+                            .frame(width: r.width, height: r.height)
+                            .position(x: r.midX, y: r.midY)
+                    }
+                    .ignoresSafeArea()
                 }
-                .scaleEffect(1 - min(max(drag, 0) / 4000, 0.1), anchor: .top)
-                .offset(y: drag)
+                .opacity(musicProgress < 0.6 ? 1 : max(0, 1 - (musicProgress - 0.6) / 0.4))
+                .background {
+                    if musicProgress > 0.5 {
+                        FloatingMusicBar(preview: true)
+                            .opacity(min(1, (musicProgress - 0.5) / 0.2))
+                    }
+                }
             } else {
                 // Video: one view for everything. The watch page only reserves the video's slot;
                 // the player is drawn on top — in the slot, grown to the whole screen, or (while
@@ -64,6 +79,24 @@ struct PlayerScreen: View {
 
     /// How far to drag for the video to reach the mini player.
     static func collapseDistance(_ container: CGSize) -> CGFloat { max(container.height * 0.5, 280) }
+
+    /// Music: how far to drag for the card's top to reach the bar's (so it tracks the finger).
+    @MainActor static func musicCollapseDistance(_ container: CGSize) -> CGFloat {
+        let router = AppRouter.shared
+        guard router.windowSize.height > 0 else { return max(container.height * 0.7, 300) }
+        return max(FloatingMusicBar.frame(in: router.windowSize, insets: router.contentInsets).minY, 200)
+    }
+
+    /// The music card's frame in the window, from full screen (0) to the bar (1).
+    static func musicCard(progress p: CGFloat, window: CGSize, insets: EdgeInsets) -> CGRect {
+        let bar = FloatingMusicBar.frame(in: window, insets: insets)
+        let side = pow(p, 1.6)               // stays wide at first, narrows towards the end
+        let minX = bar.minX * side
+        let maxX = window.width + (bar.maxX - window.width) * side
+        let minY = bar.minY * p
+        let maxY = window.height + (bar.maxY - window.height) * pow(p, 0.8)
+        return CGRect(x: minX, y: minY, width: max(maxX - minX, 1), height: max(maxY - minY, 1))
+    }
 }
 
 /// Drag down to shrink the player into the mini player.
@@ -90,8 +123,8 @@ struct CollapseGesture: ViewModifier {
                         // Finish the motion first, then hand off to the mini player without a second
                         // animation. Video: exactly into the mini player's place (progress 1).
                         let video = player.current?.isMusic != true && !player.audioOnly
-                        let target = video ? PlayerScreen.collapseDistance(container) : max(v.predictedEndTranslation.height, 640)
-                        let duration = video ? 0.26 : 0.2
+                        let target = video ? PlayerScreen.collapseDistance(container) : PlayerScreen.musicCollapseDistance(container)
+                        let duration = 0.26
                         withAnimation(.smooth(duration: duration)) { drag = target }
                         Task { @MainActor in
                             try? await Task.sleep(nanoseconds: UInt64((duration - 0.01) * 1_000_000_000))
