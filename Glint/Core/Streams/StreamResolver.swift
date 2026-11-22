@@ -183,13 +183,10 @@ final class StreamResolver: @unchecked Sendable {
     func prewarm() async {
         if tube.visitorData == nil { await tube.warmUp() }
         async let solver: Void = JSChallengeSolver.shared.prewarm(session: tube.session)
-        // Signed in: the signed-in page and its stream token, ready before the first video.
-        async let page: Void = AccountPoTokenProvider.shared.prewarm()
         if let vd = tube.visitorData {
             _ = try? await PoTokenProvider.shared.token(for: PoTokenProvider.contentBinding(visitorData: vd), visitorData: vd)
         }
         await solver
-        await page
     }
 
     struct Hints: Sendable {
@@ -218,46 +215,43 @@ final class StreamResolver: @unchecked Sendable {
         var answeredWithoutLinks = false
         let accountSignedIn = tube.isSignedIn
         let refusalsBefore = refusals
-        // The signed-in page's session (tokens minted inside youtube.com with the account).
-        // When it works the account's streams get a try even in account-free mode.
-        let usePage = accountSignedIn && !skipPage && !pageOff
-        let page = usePage ? await AccountPoTokenProvider.shared.currentSession() : nil
-        if usePage {
-            if let page {
-                trace?("Signed-in page: tokens from youtube.com with your account (account id \(page.dataSyncId == nil ? "missing" : "found"))")
-            } else if let e = await AccountPoTokenProvider.shared.lastError {
-                trace?("Signed-in page unavailable (\(e))")
-            }
-        }
-        let anonymous = accountSignedIn && anonymousStreams && page == nil
+        let anonymous = accountSignedIn && anonymousStreams
         // Whether the stream requests carry the account.
         let signedIn = accountSignedIn && !anonymous
+        // Signed-in SABR through the signed-in youtube.com page (the website's own player
+        // request and tokens) is the backup: it waits as long as the ad YouTube has lined up
+        // (4–15 s), so VISIONOS — direct 4K links, no wait, history from a separate signed-in
+        // request — goes first. The page is only built if it comes to that.
+        let usePage = accountSignedIn && !skipPage && !pageOff
+        var page: AccountPoTokenProvider.Session?
+        let watch = ClientProfile(clientName: "WEB", clientVersion: ClientProfile.webSafari.clientVersion,
+                                  clientId: 1, host: "www.youtube.com", userAgent: ClientProfile.web.userAgent,
+                                  isWebPlayback: true, fromWatchPage: true)
         var order = orderedClients
+        let vision = order.filter { $0.clientName == "VISIONOS" }
+        let pageBackup = usePage ? [watch] : []
         if signedIn {
-            // Signed in, the clients that take cookies carry the account (yt-dlp's choice):
-            // the TV client (direct links up to 4K), MWEB, then Safari WEB for its HLS manifest.
-            // VISIONOS stays first though: direct 4K links without the account (history
-            // comes from a separate signed-in request), the others back it up.
-            let vision = order.filter { $0.clientName == "VISIONOS" }
+            // Signed in: then the clients that take cookies (TV, MWEB, Safari WEB).
             let web = order.filter(\.isWebPlayback) + [.webSafari]
             let rest = order.filter { !$0.isWebPlayback && $0.clientName != "VISIONOS" }
-            if let page {
-                // The signed-in page works: first the player response embedded in the watch page
-                // it fetches (desktop WEB, its version and user agent, its tokens), i.e. what the
-                // website itself plays from. If stream protection still holds that SABR stream,
-                // Glint switches to VISIONOS at once.
-                let watch = ClientProfile(clientName: "WEB", clientVersion: page.clientVersion ?? ClientProfile.webSafari.clientVersion,
-                                          clientId: 1, host: "www.youtube.com", userAgent: ClientProfile.web.userAgent,
-                                          isWebPlayback: true, fromWatchPage: true)
-                order = [watch] + vision + web + rest
-            } else {
-                order = vision + web + rest
-            }
+            order = vision + pageBackup + web + rest
+        } else {
+            order = vision + pageBackup + order.filter { $0.clientName != "VISIONOS" }
         }
-        for client in order {
+        for var client in order {
             var webPlayer: JSChallengeSolver.Player?
             var playerToken: String?
-            let pageClient = page != nil && client.isWebPlayback && client.needsPoToken
+            if client.fromWatchPage {
+                page = await AccountPoTokenProvider.shared.currentSession()
+                guard let p = page else {
+                    let e = await AccountPoTokenProvider.shared.lastError ?? "not available"
+                    trace?("Signed-in page unavailable (\(e))")
+                    continue
+                }
+                trace?("Signed-in page: tokens from youtube.com with your account (account id \(p.dataSyncId == nil ? "missing" : "found"))")
+                client.clientVersion = p.clientVersion ?? client.clientVersion
+            }
+            let pageClient = page != nil && client.fromWatchPage
             if client.isWebPlayback {
                 if tube.visitorData == nil { await tube.warmUp() }
                 // A token bound to the video, sent with the request like the website does (it's
@@ -334,7 +328,7 @@ final class StreamResolver: @unchecked Sendable {
             }
             stream.clientKey = client.key
             // Only a request that carried the account reports to it.
-            if client.isWebPlayback, signedIn { stream.tracking = PlaybackTracking(json) }
+            if client.fromWatchPage || (client.isWebPlayback && signedIn) { stream.tracking = PlaybackTracking(json) }
             if stream.sabr != nil {
                 if let p = progressive, let url = p.progressiveURL {
                     stream.progressiveURL = url
