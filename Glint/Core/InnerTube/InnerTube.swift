@@ -63,7 +63,8 @@ final class InnerTube: @unchecked Sendable {
     func call(_ endpoint: String,
               client: ClientProfile = .web,
               body: [String: Any],
-              authenticated: Bool = true) async throws -> JSON {
+              authenticated: Bool = true,
+              visitorOverride: String? = nil) async throws -> JSON {
         var url = URLComponents(string: "https://\(client.host)/youtubei/v1/\(endpoint)")!
         url.queryItems = [URLQueryItem(name: "prettyPrint", value: "false")]
         var req = URLRequest(url: url.url!)
@@ -73,7 +74,7 @@ final class InnerTube: @unchecked Sendable {
         let browserClient = client.clientName.hasPrefix("WEB") || client.clientName == "MWEB"
             || client.clientName == "TVHTML5"
         let usedAuth = (authenticated && browserClient) ? auth : nil
-        let visitor = visitorData
+        let visitor = visitorOverride ?? visitorData
 
         var payload = body
         payload["context"] = client.context(visitorData: visitor, hl: hl, gl: gl)

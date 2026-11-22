@@ -106,7 +106,7 @@ final class StreamResolver: @unchecked Sendable {
     /// Remembered across launches (only matters while signed in).
     /// When the switch happened; after 12 hours SABR with the account gets another try (in case
     /// YouTube's stream protection changes back). Read once at launch, so a session doesn't flip.
-    private static let anonymousKey = "anonymousStreamsSince.v2"
+    private static let anonymousKey = "anonymousStreamsSince.v3"
     private static let anonymousRetry: TimeInterval = 12 * 60 * 60
     private var _anonymousStreams: Bool = {
         let since = UserDefaults.standard.double(forKey: StreamResolver.anonymousKey)
@@ -217,11 +217,29 @@ final class StreamResolver: @unchecked Sendable {
             // comes from a separate signed-in request), the others back it up.
             let vision = order.filter { $0.clientName == "VISIONOS" }
             let web = order.filter(\.isWebPlayback) + [.webSafari]
-            order = vision + web + order.filter { !$0.isWebPlayback && $0.clientName != "VISIONOS" }
+            let rest = order.filter { !$0.isWebPlayback && $0.clientName != "VISIONOS" }
+            if await AccountPoTokenProvider.shared.currentSession() != nil {
+                // Tokens from the signed-in page: give the account's SABR stream the first try
+                // (if stream protection still holds it, Glint switches to VISIONOS at once).
+                let mweb = web.filter { $0.clientName == "MWEB" }
+                order = mweb + vision + web.filter { $0.clientName != "MWEB" } + rest
+            } else {
+                order = vision + web + rest
+            }
+        }
+        // The signed-in page's session (tokens minted inside youtube.com with the account).
+        let page = signedIn ? await AccountPoTokenProvider.shared.currentSession() : nil
+        if signedIn {
+            if let page {
+                trace?("Signed-in page: tokens from youtube.com with your account (account id \(page.dataSyncId == nil ? "missing" : "found"))")
+            } else if let e = await AccountPoTokenProvider.shared.lastError {
+                trace?("Signed-in page unavailable (\(e))")
+            }
         }
         for client in order {
             var webPlayer: JSChallengeSolver.Player?
             var playerToken: String?
+            let pageClient = page != nil && client.isWebPlayback && client.needsPoToken
             if client.isWebPlayback {
                 if tube.visitorData == nil { await tube.warmUp() }
                 // A token bound to the video, sent with the request like the website does (it's
@@ -240,11 +258,13 @@ final class StreamResolver: @unchecked Sendable {
                 case .failure(let e)?: trace?("\(client.key): player PO token failed (\(e.localizedDescription))")
                 case nil: break
                 }
+                if pageClient, let t = await AccountPoTokenProvider.shared.token(for: videoId) { playerToken = t }
             }
             var json: JSON
             do {
                 json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
-                                        poToken: playerToken, authenticated: client.isWebPlayback && signedIn)
+                                        poToken: playerToken, authenticated: client.isWebPlayback && signedIn,
+                                        visitorOverride: pageClient ? page?.visitorData : nil)
             } catch {
                 trace?("\(client.key): request failed (\(error.localizedDescription))")
                 continue
@@ -259,7 +279,8 @@ final class StreamResolver: @unchecked Sendable {
             }
             if let webPlayer {
                 json = await prepareWebFormats(json, client: client, player: webPlayer, videoToken: playerToken,
-                                               accountBound: signedIn && client.isWebPlayback)
+                                               accountBound: signedIn && client.isWebPlayback,
+                                               page: pageClient ? page : nil)
             }
             let built = await build(json, client: client, hints: hints)
             // Stream protection just refused the account's token (build still hands back the
@@ -388,10 +409,16 @@ final class StreamResolver: @unchecked Sendable {
                 // Stream protection asking again: a fresh token, alternating between the
                 // binding the first one had and the video id (googlevideo's choice).
                 let binding = sd[Self.sabrBindingKey].string ?? videoId
+                let fromPage = sd[Self.sabrPageKey].bool ?? false
                 let counter = MintCounter()
                 config.mintToken = {
                     let b = counter.next() % 2 == 0 ? binding : videoId
-                    let t = try? await PoTokenProvider.shared.token(for: b, visitorData: visitorData, fresh: true)
+                    let t: String?
+                    if fromPage {
+                        t = await AccountPoTokenProvider.shared.token(for: b, fresh: true)
+                    } else {
+                        t = try? await PoTokenProvider.shared.token(for: b, visitorData: visitorData, fresh: true)
+                    }
                     return t.flatMap(Self.base64URLData)
                 }
             }
@@ -678,7 +705,8 @@ final class StreamResolver: @unchecked Sendable {
     // MARK: Requests
 
     private func player(videoId: String, client: ClientProfile, sts: Int? = nil,
-                        poToken: String? = nil, authenticated: Bool = false) async throws -> JSON {
+                        poToken: String? = nil, authenticated: Bool = false,
+                        visitorOverride: String? = nil) async throws -> JSON {
         var playback: [String: Any] = ["html5Preference": "HTML5_PREF_WANTS"]
         if let sts { playback["signatureTimestamp"] = sts }
         var body: [String: Any] = [
@@ -688,7 +716,8 @@ final class StreamResolver: @unchecked Sendable {
             "playbackContext": ["contentPlaybackContext": playback],
         ]
         if let poToken { body["serviceIntegrityDimensions"] = ["poToken": poToken] }
-        return try await tube.call("player", client: client, body: body, authenticated: authenticated)
+        return try await tube.call("player", client: client, body: body, authenticated: authenticated,
+                                   visitorOverride: visitorOverride)
     }
 
     // MARK: Web clients
@@ -725,7 +754,8 @@ final class StreamResolver: @unchecked Sendable {
     /// a PO token bound to this visitor (as yt-dlp does), so the formats below are directly
     /// playable. Formats whose challenges couldn't be solved lose their link.
     private func prepareWebFormats(_ json: JSON, client: ClientProfile, player: JSChallengeSolver.Player,
-                                   videoToken: String?, accountBound: Bool) async -> JSON {
+                                   videoToken: String?, accountBound: Bool,
+                                   page: AccountPoTokenProvider.Session? = nil) async -> JSON {
         let keys = ["adaptiveFormats", "formats"]
         let pending = keys.flatMap { json.at("streamingData.\($0)").array.compactMap(PendingLink.init) }
         let hls = json.at("streamingData.hlsManifestUrl").string
@@ -755,9 +785,18 @@ final class StreamResolver: @unchecked Sendable {
         // protection hold every signed-in SABR stream at "pending".
         let visitorData = tube.visitorData
         let dataSyncId = accountBound ? json.at("responseContext.mainAppWebResponseContext.datasyncId").string : nil
-        let bindingKind = dataSyncId != nil ? "account" : "visitor"
-        let binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:))
-        if let binding, client.needsPoToken {
+        var bindingKind = dataSyncId != nil ? "account" : "visitor"
+        var binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:))
+        if let page, client.needsPoToken {
+            // Minted in the signed-in page, bound to the account it reports.
+            let b = page.dataSyncId ?? dataSyncId ?? PoTokenProvider.contentBinding(visitorData: page.visitorData)
+            if let t = await AccountPoTokenProvider.shared.token(for: b) {
+                pot = t
+                binding = b
+                bindingKind = "signed-in page"
+            }
+        }
+        if pot == nil, let binding, client.needsPoToken {
             do {
                 pot = try await PoTokenProvider.shared.token(for: binding, visitorData: visitorData)
             } catch {
@@ -807,6 +846,7 @@ final class StreamResolver: @unchecked Sendable {
             sd[Self.sabrURLKey] = .string(sabrN.flatMap { n in solutions.n[n].map { Self.settingQuery(sabr, "n", $0) } } ?? sabr)
             if let pot { sd[Self.sabrTokenKey] = .string(pot) }
             if let binding { sd[Self.sabrBindingKey] = .string(binding) }
+            if page != nil { sd[Self.sabrPageKey] = .bool(true) }
             // If stream protection refuses that one: a token bound to the video (some sessions
             // are in YouTube's video-bound experiment, as with HLS above).
             if let videoToken, videoToken != pot { sd[Self.sabrVideoTokenKey] = .string(videoToken) }
@@ -820,6 +860,7 @@ final class StreamResolver: @unchecked Sendable {
     private static let sabrTokenKey = "glintSabrPoToken"
     private static let sabrVideoTokenKey = "glintSabrVideoPoToken"
     private static let sabrBindingKey = "glintSabrTokenBinding"
+    private static let sabrPageKey = "glintSabrPageTokens"
 
     /// The n challenge in an HLS manifest URL's path (`…/n/<challenge>/…`).
     private static func manifestN(_ url: String) -> String? {

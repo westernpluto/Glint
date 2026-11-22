@@ -13,9 +13,9 @@ final class PoTokenProvider: NSObject, WKNavigationDelegate {
     static let shared = PoTokenProvider()
 
     /// The web BotGuard request key (same as bgutil's).
-    private static let requestKey = "O43z0dpjhgX20SCx4KAo"
-    private static let apiKey = "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw"
-    private static let jnn = "https://jnn-pa.googleapis.com/$rpc/google.internal.waa.v1.Waa/"
+    static let requestKey = "O43z0dpjhgX20SCx4KAo"
+    static let apiKey = "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw"
+    static let jnn = "https://jnn-pa.googleapis.com/$rpc/google.internal.waa.v1.Waa/"
     /// yt-dlp caches web tokens 6 hours (the integrity token usually says 12).
     private static let maxLifetime: TimeInterval = 6 * 60 * 60
 
