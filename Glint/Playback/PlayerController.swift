@@ -28,6 +28,20 @@ struct QueueItem: Identifiable, Hashable {
 
 enum PlayerPresentation { case hidden, mini, expanded }
 
+/// Off, the whole queue over again, or the current song / video on a loop.
+enum RepeatMode: String, CaseIterable {
+    case off, all, one
+    var next: RepeatMode { self == .off ? .all : self == .all ? .one : .off }
+    var icon: String { self == .one ? "repeat.1" : "repeat" }
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .all: return "Repeat all"
+        case .one: return "Repeat one"
+        }
+    }
+}
+
 /// The single app-wide player. One AVPlayer survives navigation, screen changes
 /// (cover ⇄ inner display), backgrounding and Picture in Picture.
 @MainActor
@@ -73,6 +87,18 @@ final class PlayerController {
     /// Pause at this time, or at the end of the current item when `sleepAtEnd`.
     var sleepAt: Date?
     var sleepAtEnd = false
+    var repeatMode: RepeatMode = RepeatMode(rawValue: UserDefaults.standard.string(forKey: "repeatMode") ?? "") ?? .off {
+        didSet {
+            UserDefaults.standard.set(repeatMode.rawValue, forKey: "repeatMode")
+            nowPlaying?.update()
+        }
+    }
+
+    /// Off → all → one → off, with a short notice.
+    func cycleRepeat() {
+        repeatMode = repeatMode.next
+        flash(repeatMode == .off ? "Repeat off" : repeatMode.title)
+    }
     var isPiPActive = false
     var isFullscreen = false
     var showQueue = false
@@ -789,6 +815,9 @@ final class PlayerController {
         if index + 1 < queue.count {
             index += 1
             start()
+        } else if repeatMode == .all, queue.count > 1 {
+            index = 0
+            start()
         } else if let c = current, !c.isMusic, let n = extras?.related.first {
             queue.append(QueueItem(video: n))
             index += 1
@@ -1033,8 +1062,16 @@ final class PlayerController {
             flash("Sleep timer: paused")
             return
         }
+        if repeatMode == .one {
+            seek(to: 0)
+            resume()
+            return
+        }
         if index + 1 < queue.count {
             next()
+        } else if repeatMode == .all {
+            // Back to the start of the queue (a single video or song just plays again).
+            if queue.count > 1 { index = 0; start() } else { seek(to: 0); resume() }
         } else if !c.isMusic, settings.autoplay, extras?.related.first != nil {
             next()
         } else if c.isMusic {

@@ -22,6 +22,17 @@ final class NowPlaying {
             MainActor.assumeIsolated { self?.controller?.seek(to: t) }
             return .success
         }
+        c.changeRepeatModeCommand.addTarget { [weak self] e in
+            guard let e = e as? MPChangeRepeatModeCommandEvent else { return .commandFailed }
+            let mode: RepeatMode
+            switch e.repeatType {
+            case .one: mode = .one
+            case .all: mode = .all
+            default: mode = .off
+            }
+            MainActor.assumeIsolated { self?.controller?.repeatMode = mode }
+            return .success
+        }
         c.skipForwardCommand.preferredIntervals = [10]
         c.skipBackwardCommand.preferredIntervals = [10]
         c.skipForwardCommand.addTarget { [weak self] _ in MainActor.assumeIsolated { self?.controller?.skip(by: 10) }; return .success }
@@ -39,6 +50,13 @@ final class NowPlaying {
         cc.previousTrackCommand.isEnabled = true
         cc.skipForwardCommand.isEnabled = !item.isMusic
         cc.skipBackwardCommand.isEnabled = !item.isMusic
+        let repeatType: MPRepeatType
+        switch c.repeatMode {
+        case .off: repeatType = .off
+        case .all: repeatType = .all
+        case .one: repeatType = .one
+        }
+        cc.changeRepeatModeCommand.currentRepeatType = repeatType
 
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: c.details?.title ?? item.title,

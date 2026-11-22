@@ -164,7 +164,7 @@ struct NowPlayingView: View {
         .collapsesPlayer($drag)
     }
 
-    /// Three things under the transport: lyrics, the queue, and everything else.
+    /// Under the transport: lyrics, the queue, repeat, and everything else.
     private func actionRow(showQueueButton: Bool) -> some View {
         HStack(spacing: 0) {
             if showQueueButton {
@@ -173,6 +173,9 @@ struct NowPlayingView: View {
                 }
                 actionTile("Up next", "list.bullet") { showQueue = true }
             }
+            actionTile(player.repeatMode == .one ? "Repeat one" : "Repeat", player.repeatMode.icon,
+                       on: player.repeatMode != .off) { player.cycleRepeat() }
+                .accessibilityValue(player.repeatMode.title)
             PlayerOptionsMenu(music: true) {
                 tileLabel("More", "ellipsis", on: player.sleepActive || player.rate != 1)
             }

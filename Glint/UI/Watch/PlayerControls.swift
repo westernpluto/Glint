@@ -183,6 +183,14 @@ struct PlayerOptionsMenu<MenuLabel: View>: View {
                 Label("Speed · " + speedLabel(Double(player.rate)), systemImage: "gauge.with.dots.needle.67percent")
             }
             SleepTimerMenu()
+            Menu {
+                ForEach(RepeatMode.allCases, id: \.self) { m in
+                    choice(m.title, selected: player.repeatMode == m) { player.repeatMode = m }
+                }
+            } label: {
+                Label("Repeat · " + (player.repeatMode == .off ? "Off" : player.repeatMode == .one ? "One" : "All"),
+                      systemImage: player.repeatMode.icon)
+            }
 
             Divider()
             if !music, player.stream?.isLive != true {
