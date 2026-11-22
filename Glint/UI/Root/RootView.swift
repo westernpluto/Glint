@@ -55,6 +55,21 @@ struct RootView: View {
                         .transition(.move(edge: .bottom))
                         .zIndex(2)
                 }
+
+                // Pulling Notification Center down starts at the top edge: without this, the
+                // same swipe also reached the list (bounce / pull to refresh) or the player
+                // (shrinking to the mini player) before iOS took over. Touches that begin in
+                // the status-bar strip go to iOS only.
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(height: max(geo.safeAreaInsets.top, 14))
+                        .contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0))
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 0).allowsHitTesting(false)
+                }
+                .ignoresSafeArea(edges: .top)
+                .zIndex(10)
             }
             .background {
                 Color.clear

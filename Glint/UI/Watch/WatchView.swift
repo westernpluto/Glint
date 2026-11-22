@@ -111,6 +111,8 @@ struct CollapseGesture: ViewModifier {
             // local coordinates fed its own movement back into the drag and made it wobble.
             DragGesture(minimumDistance: 12, coordinateSpace: .global)
                 .onChanged { v in
+                    // A swipe from the top edge is Notification Center's, not ours.
+                    guard v.startLocation.y > 40 else { return }
                     let dy = v.translation.height
                     guard abs(dy) > abs(v.translation.width) else { return }
                     // Follow the finger downwards only: moving up from the top would uncover the
@@ -118,6 +120,7 @@ struct CollapseGesture: ViewModifier {
                     drag = max(dy, 0)
                 }
                 .onEnded { v in
+                    guard v.startLocation.y > 40 else { drag = 0; return }
                     let close = v.translation.height > 110 || v.predictedEndTranslation.height > 260
                     if close {
                         // Finish the motion first, then hand off to the mini player without a second
