@@ -87,7 +87,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
                 const c = window.ytcfg;
                 const tok = await window.__glintMint(new TextEncoder().encode(id));
                 let t = ''; for (const b of tok) t += String.fromCharCode(b);
-                const potoken = btoa(t).replace(/\+/g, '-').replace(/\//g, '_');
+                const potoken = btoa(t).replace(/\\+/g, '-').replace(/\\//g, '_');
                 const body = {
                     context: c.get('INNERTUBE_CONTEXT'),
                     videoId: id, racyCheckOk: true, contentCheckOk: true,
@@ -135,7 +135,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
                 for (let j = i; j < html.length; j++) {
                     const ch = html[j];
                     if (inStr) {
-                        if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false;
+                        if (esc) esc = false; else if (ch === '\\\\') esc = true; else if (ch === '"') inStr = false;
                     } else if (ch === '"') inStr = true;
                     else if (ch === '{') depth++;
                     else if (ch === '}') { depth--; if (depth === 0) return html.slice(i, j + 1); }
