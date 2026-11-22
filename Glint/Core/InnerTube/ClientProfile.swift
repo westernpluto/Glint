@@ -16,6 +16,9 @@ struct ClientProfile {
     /// Web-family clients that also need a WebPO token on their stream links (the TV client
     /// only needs the challenges solved).
     var needsPoToken = true
+    /// Not a request of its own: the player response embedded in the watch page the signed-in
+    /// page fetched (desktop WEB, same version and user agent as that page).
+    var fromWatchPage = false
     var origin: String { "https://" + host }
 
     func context(visitorData: String?, hl: String, gl: String) -> [String: Any] {

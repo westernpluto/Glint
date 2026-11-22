@@ -238,11 +238,15 @@ final class StreamResolver: @unchecked Sendable {
             let vision = order.filter { $0.clientName == "VISIONOS" }
             let web = order.filter(\.isWebPlayback) + [.webSafari]
             let rest = order.filter { !$0.isWebPlayback && $0.clientName != "VISIONOS" }
-            if page != nil {
-                // Tokens from the signed-in page: give the account's SABR stream the first try
-                // (if stream protection still holds it, Glint switches to VISIONOS at once).
-                let mweb = web.filter { $0.clientName == "MWEB" }
-                order = mweb + vision + web.filter { $0.clientName != "MWEB" } + rest
+            if let page {
+                // The signed-in page works: first the player response embedded in the watch page
+                // it fetches (desktop WEB, its version and user agent, its tokens), i.e. what the
+                // website itself plays from. If stream protection still holds that SABR stream,
+                // Glint switches to VISIONOS at once.
+                let watch = ClientProfile(clientName: "WEB", clientVersion: page.clientVersion ?? ClientProfile.webSafari.clientVersion,
+                                          clientId: 1, host: "www.youtube.com", userAgent: ClientProfile.web.userAgent,
+                                          isWebPlayback: true, fromWatchPage: true)
+                order = [watch] + vision + web + rest
             } else {
                 order = vision + web + rest
             }
@@ -272,13 +276,23 @@ final class StreamResolver: @unchecked Sendable {
                 if pageClient, let t = await AccountPoTokenProvider.shared.token(for: videoId) { playerToken = t }
             }
             var json: JSON
-            do {
-                json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
-                                        poToken: playerToken, authenticated: client.isWebPlayback && signedIn,
-                                        visitorOverride: pageClient ? page?.visitorData : nil)
-            } catch {
-                trace?("\(client.key): request failed (\(error.localizedDescription))")
-                continue
+            if client.fromWatchPage {
+                guard let data = await AccountPoTokenProvider.shared.watchPlayerResponse(videoId: videoId),
+                      let parsed = try? JSON.parse(data) else {
+                    trace?("\(client.key) (watch page): no player response in the page")
+                    continue
+                }
+                json = parsed
+                trace?("\(client.key) (watch page): player response from the signed-in watch page")
+            } else {
+                do {
+                    json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
+                                            poToken: playerToken, authenticated: client.isWebPlayback && signedIn,
+                                            visitorOverride: pageClient ? page?.visitorData : nil)
+                } catch {
+                    trace?("\(client.key): request failed (\(error.localizedDescription))")
+                    continue
+                }
             }
             guard json.at("playabilityStatus.status").string == "OK" else {
                 let reason = json.at("playabilityStatus.reason").string

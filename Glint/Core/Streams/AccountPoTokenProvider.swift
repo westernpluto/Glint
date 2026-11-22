@@ -19,6 +19,8 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
     struct Session: Sendable, Equatable {
         var visitorData: String
         var dataSyncId: String?
+        /// The desktop web client version the page runs (for requests that pose as it).
+        var clientVersion: String?
     }
 
     enum PageError: LocalizedError {
@@ -71,6 +73,35 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
         return token
     }
 
+    /// The player response YouTube embeds in the watch page, fetched from inside the signed-in
+    /// page (cookies and the browser's own request), exactly what the website plays from.
+    func watchPlayerResponse(videoId: String) async -> Data? {
+        guard await currentSession() != nil, let webView else { return nil }
+        let text = try? await webView.callAsyncJavaScript("""
+            const r = await fetch('/watch?v=' + encodeURIComponent(id) + '&bpctr=9999999999&has_verified=1',
+                                  { credentials: 'include' });
+            if (!r.ok) throw new Error('watch page ' + r.status);
+            const html = await r.text();
+            const key = 'ytInitialPlayerResponse';
+            let i = html.indexOf(key + ' = ');
+            if (i < 0) i = html.indexOf(key + '=');
+            if (i < 0) return null;
+            i = html.indexOf('{', i);
+            // The JSON object: matching braces, skipping strings.
+            let depth = 0, inStr = false, esc = false;
+            for (let j = i; j < html.length; j++) {
+                const ch = html[j];
+                if (inStr) {
+                    if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false;
+                } else if (ch === '"') inStr = true;
+                else if (ch === '{') depth++;
+                else if (ch === '}') { depth--; if (depth === 0) return html.slice(i, j + 1); }
+            }
+            return null;
+            """, arguments: ["id": videoId], in: nil, contentWorld: .page) as? String
+        return text?.data(using: .utf8)
+    }
+
     func reset() {
         teardown()
         failedAt = .distantPast
@@ -115,6 +146,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
             return JSON.stringify({
                 visitor: c.get('VISITOR_DATA') || (c.get('INNERTUBE_CONTEXT') || {}).client?.visitorData || null,
                 datasync: c.get('DATASYNC_ID') || null,
+                version: c.get('INNERTUBE_CONTEXT_CLIENT_VERSION') || null,
                 loggedIn: !!c.get('LOGGED_IN'),
             });
             """) as? String
@@ -202,7 +234,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
                   "requestKey": PoTokenProvider.requestKey])
         let ttl = (lifetime as? NSNumber)?.doubleValue ?? 0
         minterExpiry = Date().addingTimeInterval(max(min(ttl > 0 ? ttl : 6 * 3600, 6 * 3600) - 300, 60))
-        let s = Session(visitorData: visitor, dataSyncId: datasync)
+        let s = Session(visitorData: visitor, dataSyncId: datasync, clientVersion: info["version"] as? String)
         session = s
         account = auth
         lastError = nil
