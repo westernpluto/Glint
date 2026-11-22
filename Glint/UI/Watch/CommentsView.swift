@@ -221,12 +221,15 @@ struct CommentRow: View {
 
 /// Compact entry point on narrow displays: a tappable card that opens all comments.
 struct CommentsPreview: View {
+    /// Opens the comments in place (under the video, which keeps playing in view). Without
+    /// it, they open in a sheet.
+    var open: (() -> Void)? = nil
     @Environment(PlayerController.self) private var player
     @State private var show = false
     @State private var top: Comment?
 
     var body: some View {
-        Button { show = true } label: {
+        Button { if let open { open() } else { show = true } } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Comments").font(.headline)
@@ -282,6 +285,47 @@ struct CommentsPreview: View {
             .presentationDetents([.medium, .large])
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
         }
+    }
+}
+
+/// Comments filling the space under the video, scrolling on their own, so you can read them
+/// while you watch. Swipe the header down or tap ✕ to go back to the details.
+struct CommentsPanel: View {
+    var close: () -> Void
+    @Environment(PlayerController.self) private var player
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Comments").font(.headline)
+                if let c = player.extras?.commentCount {
+                    Text(c).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.subheadline.weight(.bold))
+                        .frame(width: 36, height: 36)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close comments")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 20).onEnded { v in
+                if v.translation.height > 60 { close() }
+            })
+            Divider()
+            ScrollView {
+                CommentsList(token: player.extras?.commentsToken)
+                    .padding(16)
+            }
+            .scrollIndicators(.automatic)
+        }
+        .background(Color(uiColor: .systemBackground))
+        .handlesSeekLinks()
     }
 }
 

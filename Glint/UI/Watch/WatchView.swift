@@ -317,6 +317,8 @@ struct WatchView: View {
     @Environment(PlayerController.self) private var player
     @Environment(\.screenClass) private var screen
     @State private var channelSheet: Route?
+    /// Narrow tall layout: comments open in place of the details under the video.
+    @State private var showComments = false
     @State private var size: CGSize = .zero
     /// Side safe areas (the iPhone Duo outer display keeps its status bar in a column on the
     /// right): the tall layout's video extends under them instead of leaving a black strip.
@@ -349,7 +351,7 @@ struct WatchView: View {
                 }
             }
         }
-        .onChange(of: player.current?.videoId) { _, _ in channelSheet = nil }
+        .onChange(of: player.current?.videoId) { _, _ in channelSheet = nil; showComments = false }
         .handlesSeekLinks()
     }
 
@@ -407,6 +409,19 @@ struct WatchView: View {
     /// Wide: Up next column. Tall: details then Up next (side by side on a large display).
     @ViewBuilder
     private func secondary(wide: Bool) -> some View {
+        ZStack {
+            details(wide: wide)
+            if showComments && !wide && screen != .expanded {
+                CommentsPanel { withAnimation(.smooth(duration: 0.3)) { showComments = false } }
+                    .transition(.move(edge: .bottom))
+                    .zIndex(1)
+            }
+        }
+        .clipped()
+    }
+
+    @ViewBuilder
+    private func details(wide: Bool) -> some View {
         ScrollView {
             if wide {
                 WatchSidePanel().padding(.horizontal, 16).padding(.vertical, 20)
@@ -419,7 +434,7 @@ struct WatchView: View {
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     WatchDetails(channelSheet: $channelSheet)
-                    CommentsPreview()
+                    CommentsPreview { withAnimation(.smooth(duration: 0.3)) { showComments = true } }
                     UpNextList()
                 }
                 .padding(.horizontal, 16)
