@@ -242,18 +242,20 @@ final class StreamResolver: @unchecked Sendable {
                 json = await prepareWebFormats(json, client: client, player: webPlayer, videoToken: playerToken,
                                                accountBound: signedIn && client.isWebPlayback)
             }
-            guard var stream = await build(json, client: client, hints: hints) else {
-                // Stream protection just refused the account's token: start over without it.
-                if signedIn, anonymousStreams {
-                    do {
-                        return try await resolveFresh(videoId: videoId, hints: hints, isRetry: isRetry)
-                    } catch {
-                        // Without the account it doesn't play at all (bot check, sign-in only…):
-                        // back to the account's streams.
-                        trace?("Without the account: \(error.localizedDescription) → back to streaming with it")
-                        cacheLock.withLock { _anonymousStreams = false }
-                    }
+            let built = await build(json, client: client, hints: hints)
+            // Stream protection just refused the account's token (build still hands back the
+            // 360p file): start over without the account.
+            if signedIn, anonymousStreams {
+                do {
+                    return try await resolveFresh(videoId: videoId, hints: hints, isRetry: isRetry)
+                } catch {
+                    // Without the account it doesn't play at all (bot check, sign-in only…):
+                    // back to the account's streams.
+                    trace?("Without the account: \(error.localizedDescription) → back to streaming with it")
+                    cacheLock.withLock { _anonymousStreams = false }
                 }
+            }
+            guard var stream = built else {
                 if client.isWebPlayback { answeredWithoutLinks = true }
                 trace?("\(client.key): no usable formats")
                 continue

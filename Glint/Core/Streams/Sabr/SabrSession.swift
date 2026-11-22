@@ -163,10 +163,14 @@ actor SabrSession {
 
     /// Waits until `key` is cached, starting (or redirecting) the request as needed.
     private func fetch(_ key: Key, atMs: Double) async throws {
-        for attempt in 0..<4 {
+        for attempt in 0..<6 {
             if isCached(key) { return }
             let at = atMs + Double(attempt) * 200
-            if inFlight == nil || !inFlightCovers(at) { startRequest(atMs: at) }
+            if inFlight == nil {
+                startRequest(atMs: at)
+            } else if !inFlightCovers(at), !shouldWait(for: at) {
+                startRequest(atMs: at)
+            }
             await waitFor(key)
             if isCached(key) { return }
             if attempt >= 1, let e = lastError, !(e is CancellationError) { throw e }
@@ -192,6 +196,15 @@ actor SabrSession {
     private func inFlightCovers(_ ms: Double) -> Bool {
         let video = audioOnly ? nil : currentVideo?.itag
         return inFlightVideo == video && ms >= inFlightStartMs - 11_000 && ms < inFlightStartMs + readaheadMs
+    }
+
+    /// A little ahead of the running request (AVPlayer reading ahead, often several segments
+    /// at once): let that one finish rather than cancel it. Cancelling made two of AVPlayer's
+    /// requests take turns killing each other's answer until both gave up. Behind it, another
+    /// format, or far ahead (a seek) still starts a new request.
+    private func shouldWait(for ms: Double) -> Bool {
+        let video = audioOnly ? nil : currentVideo?.itag
+        return inFlightVideo == video && ms >= inFlightStartMs && ms < inFlightStartMs + readaheadMs + 60_000
     }
 
     private func startRequest(atMs: Double) {
