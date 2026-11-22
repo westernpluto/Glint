@@ -104,7 +104,7 @@ final class StreamResolver: @unchecked Sendable {
     /// streams without the account (as before signing in) and use the account only for the
     /// watch-history reports. Until the app restarts.
     /// Remembered across launches (only matters while signed in).
-    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams.v2")
+    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams.v3")
     var anonymousStreams: Bool { cacheLock.withLock { _anonymousStreams } }
     func useAnonymousStreams(because reason: String = "Stream protection refuses the account's token") {
         let changed: Bool = cacheLock.withLock {
@@ -112,7 +112,7 @@ final class StreamResolver: @unchecked Sendable {
             if !_anonymousStreams { cache = [:] }   // links resolved with the account
             return !_anonymousStreams
         }
-        UserDefaults.standard.set(true, forKey: "anonymousStreams.v2")
+        UserDefaults.standard.set(true, forKey: "anonymousStreams.v3")
         if changed { trace?("\(reason): streaming without the account (history still syncs)") }
     }
     private let penaltyLifetime: TimeInterval = 60 * 60
@@ -260,7 +260,7 @@ final class StreamResolver: @unchecked Sendable {
                     // back to the account's streams.
                     trace?("Without the account: \(error.localizedDescription) → back to streaming with it")
                     cacheLock.withLock { _anonymousStreams = false }
-                    UserDefaults.standard.set(false, forKey: "anonymousStreams.v2")
+                    UserDefaults.standard.set(false, forKey: "anonymousStreams.v3")
                 }
             }
             guard var stream = built else {
