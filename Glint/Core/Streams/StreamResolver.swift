@@ -96,7 +96,7 @@ final class StreamResolver: @unchecked Sendable {
     /// only their real apps can make, so YouTube may cut their streams short; `reachability`
     /// catches that. (ANDROID_VR 1.65.10 is gone: every format it gets has been refused
     /// since August 2026.)
-    var clients: [ClientProfile] = [.visionOS, .mweb, .androidVR, .androidVR("1.60.19"), .ios, .android]
+    var clients: [ClientProfile] = [.tvSamsung, .visionOS, .mweb, .androidVR, .androidVR("1.60.19"), .ios, .android]
 
     /// Clients whose streams recently failed during playback, and when. They are tried last.
     private var penalized: [String: Date] = [:]
@@ -106,7 +106,7 @@ final class StreamResolver: @unchecked Sendable {
     /// Remembered across launches (only matters while signed in).
     /// When the switch happened; after 12 hours SABR with the account gets another try (in case
     /// YouTube's stream protection changes back). Read once at launch, so a session doesn't flip.
-    private static let anonymousKey = "anonymousStreamsSince"
+    private static let anonymousKey = "anonymousStreamsSince.v2"
     private static let anonymousRetry: TimeInterval = 12 * 60 * 60
     private var _anonymousStreams: Bool = {
         let since = UserDefaults.standard.double(forKey: StreamResolver.anonymousKey)
@@ -211,8 +211,8 @@ final class StreamResolver: @unchecked Sendable {
         let signedIn = accountSignedIn && !anonymous
         var order = orderedClients
         if signedIn {
-            // Signed in, the web clients carry the account (yt-dlp's choice with cookies):
-            // MWEB, then Safari WEB for its HLS manifest.
+            // Signed in, the clients that take cookies carry the account (yt-dlp's choice):
+            // the TV client (direct links up to 4K), MWEB, then Safari WEB for its HLS manifest.
             let web = order.filter(\.isWebPlayback) + [.webSafari]
             order = web + order.filter { !$0.isWebPlayback }
         }
@@ -225,21 +225,23 @@ final class StreamResolver: @unchecked Sendable {
                 // what YouTube looks at before asking "are you a bot?"); minted while the player
                 // script loads.
                 let visitorData = tube.visitorData
-                async let token = Self.videoToken(videoId, visitorData: visitorData)
+                let wantsToken = client.needsPoToken
+                async let token = Self.optionalVideoToken(wantsToken ? videoId : nil, visitorData: visitorData)
                 do { webPlayer = try await JSChallengeSolver.shared.player(session: tube.session) } catch {
                     trace?("\(client.key): player script unavailable (\(error.localizedDescription))")
                     _ = await token
                     continue
                 }
                 switch await token {
-                case .success(let t): playerToken = t
-                case .failure(let e): trace?("\(client.key): player PO token failed (\(e.localizedDescription))")
+                case .success(let t)?: playerToken = t
+                case .failure(let e)?: trace?("\(client.key): player PO token failed (\(e.localizedDescription))")
+                case nil: break
                 }
             }
             var json: JSON
             do {
                 json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
-                                        poToken: playerToken, authenticated: client.isWebPlayback)
+                                        poToken: playerToken, authenticated: client.isWebPlayback && signedIn)
             } catch {
                 trace?("\(client.key): request failed (\(error.localizedDescription))")
                 continue
@@ -524,6 +526,11 @@ final class StreamResolver: @unchecked Sendable {
         return t
     }
 
+    private static func optionalVideoToken(_ videoId: String?, visitorData: String?) async -> Result<String, Error>? {
+        guard let videoId else { return nil }
+        return await videoToken(videoId, visitorData: visitorData)
+    }
+
     private static func videoToken(_ videoId: String, visitorData: String?) async -> Result<String, Error> {
         do { return .success(try await PoTokenProvider.shared.token(for: videoId, visitorData: visitorData)) }
         catch { return .failure(error) }
@@ -747,14 +754,14 @@ final class StreamResolver: @unchecked Sendable {
         let dataSyncId = accountBound ? json.at("responseContext.mainAppWebResponseContext.datasyncId").string : nil
         let bindingKind = dataSyncId != nil ? "account" : "visitor"
         let binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:))
-        if let binding {
+        if let binding, client.needsPoToken {
             do {
                 pot = try await PoTokenProvider.shared.token(for: binding, visitorData: visitorData)
             } catch {
                 trace?("\(client.key): PO token failed (\(error.localizedDescription))")
             }
         }
-        trace?("\(client.key): player \(player.id), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(pot == nil ? "none" : "ok (\(bindingKind))")")
+        trace?("\(client.key): player \(player.id), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(!client.needsPoToken ? "not needed" : pot == nil ? "none" : "ok (\(bindingKind))")")
 
         func rewrite(_ f: JSON) -> JSON {
             guard case .object(var o) = f, let link = PendingLink(f) else { return f }

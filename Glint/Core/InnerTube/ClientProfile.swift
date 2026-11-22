@@ -13,6 +13,9 @@ struct ClientProfile {
     /// Web-family client: stream links need the player script's challenges solved
     /// (`JSChallengeSolver`) and a PO token (`PoTokenProvider`) to play to the end.
     var isWebPlayback = false
+    /// Web-family clients that also need a WebPO token on their stream links (the TV client
+    /// only needs the challenges solved).
+    var needsPoToken = true
     var origin: String { "https://" + host }
 
     func context(visitorData: String?, hl: String, gl: String) -> [String: Any] {
@@ -102,6 +105,26 @@ struct ClientProfile {
         host: "www.youtube.com",
         userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)",
         isWebPlayback: true
+    )
+
+    /// yt-dlp's `tv_samsung` (its default since October 2026, and first choice signed in
+    /// since YouTube started holding signed-in web/SABR streams in November): the smart-TV
+    /// app. Takes the account's cookies and answers with direct adaptive links up to 4K that
+    /// only need the player script's challenges solved, no PO token.
+    static let tvSamsung = ClientProfile(
+        clientName: "TVHTML5",
+        clientVersion: "5.20260707",
+        clientId: 7,
+        host: "www.youtube.com",
+        userAgent: "Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1",
+        extraContext: [
+            "deviceMake": "Samsung",
+            "deviceModel": "UKS9800",
+            "osName": "Tizen",
+            "osVersion": "2.4.0",
+        ],
+        isWebPlayback: true,
+        needsPoToken: false
     )
 
     static let ios = ClientProfile(

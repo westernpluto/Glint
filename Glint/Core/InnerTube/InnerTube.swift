@@ -71,6 +71,7 @@ final class InnerTube: @unchecked Sendable {
 
         // Cookie auth only works for the browser clients.
         let browserClient = client.clientName.hasPrefix("WEB") || client.clientName == "MWEB"
+            || client.clientName == "TVHTML5"
         let usedAuth = (authenticated && browserClient) ? auth : nil
         let visitor = visitorData
 
