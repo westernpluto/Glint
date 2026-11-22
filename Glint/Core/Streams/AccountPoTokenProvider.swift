@@ -62,14 +62,23 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
     }
 
     /// Blocks the page's own sign-in cookie renewal (only the app's requests keep the session).
+    private static var ruleError: String?
     private static func noRotationRules() async -> WKContentRuleList? {
+        // WebKit's url-filter is a restricted regex: no alternation, so one rule per pattern.
         let rules = """
             [{"trigger":{"url-filter":"RotateCookies"},"action":{"type":"block"}},
-             {"trigger":{"url-filter":"accounts\\.google\\.com/.*(CheckCookie|SetSID|SetOSID)"},"action":{"type":"block"}},
-             {"trigger":{"url-filter":"accounts\\.youtube\\.com/"},"action":{"type":"block"}}]
+             {"trigger":{"url-filter":"accounts\\\\.google\\\\.com/.*CheckCookie"},"action":{"type":"block"}},
+             {"trigger":{"url-filter":"accounts\\\\.google\\\\.com/.*SetSID"},"action":{"type":"block"}},
+             {"trigger":{"url-filter":"accounts\\\\.google\\\\.com/.*SetOSID"},"action":{"type":"block"}},
+             {"trigger":{"url-filter":"accounts\\\\.youtube\\\\.com"},"action":{"type":"block"}}]
             """
-        return try? await WKContentRuleListStore.default().compileContentRuleList(
-            forIdentifier: "glint-no-cookie-rotation", encodedContentRuleList: rules)
+        do {
+            return try await WKContentRuleListStore.default().compileContentRuleList(
+                forIdentifier: "glint-no-cookie-rotation-2", encodedContentRuleList: rules)
+        } catch {
+            ruleError = error.localizedDescription
+            return nil
+        }
     }
 
     /// The signed-in page's session (building the page and minter if needed), or nil.
@@ -328,7 +337,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
         config.websiteDataStore = .nonPersistent()
         config.mediaTypesRequiringUserActionForPlayback = .all
         guard let rules = await Self.noRotationRules() else {
-            throw PageError.step("Couldn't set up cookie protection")   // never without it
+            throw PageError.step("Couldn't set up cookie protection: \(Self.ruleError ?? "?")")   // never without it
         }
         config.userContentController.add(rules)
         let store = config.websiteDataStore.httpCookieStore
