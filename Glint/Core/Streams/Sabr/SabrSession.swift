@@ -119,6 +119,10 @@ actor SabrSession {
 
     func setAudioOnly(_ value: Bool) { audioOnly = value }
 
+    /// Stream protection is waiting for a token it accepts (it then sends one free batch and
+    /// nothing more).
+    var protectionPending: Bool { lastProtection == 2 || lastProtection == 3 }
+
     /// Drop cached media (keeps init segments and indexes): this session isn't playing.
     func trim() {
         idle = true

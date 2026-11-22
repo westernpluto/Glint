@@ -386,6 +386,12 @@ final class StreamResolver: @unchecked Sendable {
                 let video = hints.audioOnly ? nil : SabrBandwidth.autoVideo(
                     session.videos, audioBitrate: audio.bitrate, defaultQuality: hints.defaultQuality)
                 try await session.prepare(video: video, atMs: max(0, hints.startAt) * 1000)
+                // Signed in and stream protection is already waiting on the token: it would play
+                // the free first batch and then stop. Switch before playback starts.
+                if tube.isSignedIn, !anonymousStreams, await session.protectionPending {
+                    useAnonymousStreams(because: "Stream protection is holding the account's SABR stream")
+                    return nil
+                }
                 if attempt > 0 { trace?("\(client.key): SABR ok with the video-bound token") }
                 break
             } catch {
