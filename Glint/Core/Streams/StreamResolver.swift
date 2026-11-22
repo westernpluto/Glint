@@ -277,13 +277,14 @@ final class StreamResolver: @unchecked Sendable {
             }
             var json: JSON
             if client.fromWatchPage {
-                guard let data = await AccountPoTokenProvider.shared.watchPlayerResponse(videoId: videoId),
+                guard let data = await AccountPoTokenProvider.shared.pagePlayerResponse(videoId: videoId, sts: webPlayer?.sts),
                       let parsed = try? JSON.parse(data) else {
-                    trace?("\(client.key) (watch page): no player response in the page")
+                    let why = await AccountPoTokenProvider.shared.lastPlayerError ?? "no response"
+                    trace?("\(client.key) (signed-in page): no player response (\(why))")
                     continue
                 }
                 json = parsed
-                trace?("\(client.key) (watch page): player response from the signed-in watch page")
+                trace?("\(client.key) (signed-in page): player response as the website gets it")
             } else {
                 do {
                     json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,

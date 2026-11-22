@@ -73,33 +73,80 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
         return token
     }
 
-    /// The player response YouTube embeds in the watch page, fetched from inside the signed-in
-    /// page (cookies and the browser's own request), exactly what the website plays from.
-    func watchPlayerResponse(videoId: String) async -> Data? {
-        guard await currentSession() != nil, let webView else { return nil }
-        let text = try? await webView.callAsyncJavaScript("""
-            const r = await fetch('/watch?v=' + encodeURIComponent(id) + '&bpctr=9999999999&has_verified=1',
-                                  { credentials: 'include' });
-            if (!r.ok) throw new Error('watch page ' + r.status);
-            const html = await r.text();
-            const key = 'ytInitialPlayerResponse';
-            let i = html.indexOf(key + ' = ');
-            if (i < 0) i = html.indexOf(key + '=');
-            if (i < 0) return null;
-            i = html.indexOf('{', i);
-            // The JSON object: matching braces, skipping strings.
-            let depth = 0, inStr = false, esc = false;
-            for (let j = i; j < html.length; j++) {
-                const ch = html[j];
-                if (inStr) {
-                    if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false;
-                } else if (ch === '"') inStr = true;
-                else if (ch === '{') depth++;
-                else if (ch === '}') { depth--; if (depth === 0) return html.slice(i, j + 1); }
-            }
-            return null;
-            """, arguments: ["id": videoId], in: nil, contentWorld: .page) as? String
-        return text?.data(using: .utf8)
+    private(set) var lastPlayerError: String?
+
+    /// The player response as the website gets it when you open a video: the page's own
+    /// youtubei/v1/player request (its ytcfg context, cookies, SAPISIDHASH, a page-minted video
+    /// token), else the one embedded in the fetched watch page. `sts` keeps the formats in
+    /// step with Glint's challenge solver.
+    func pagePlayerResponse(videoId: String, sts: Int?) async -> Data? {
+        guard await currentSession() != nil, let webView, let auth = InnerTube.shared.auth else { return nil }
+        lastPlayerError = nil
+        do {
+            let text = try await run("Player request", webView, """
+                const c = window.ytcfg;
+                const tok = await window.__glintMint(new TextEncoder().encode(id));
+                let t = ''; for (const b of tok) t += String.fromCharCode(b);
+                const potoken = btoa(t).replace(/\+/g, '-').replace(/\//g, '_');
+                const body = {
+                    context: c.get('INNERTUBE_CONTEXT'),
+                    videoId: id, racyCheckOk: true, contentCheckOk: true,
+                    playbackContext: { contentPlaybackContext: {
+                        html5Preference: 'HTML5_PREF_WANTS',
+                        signatureTimestamp: sts || c.get('STS'),
+                    } },
+                    serviceIntegrityDimensions: { poToken: potoken },
+                };
+                const r = await fetch('/youtubei/v1/player?prettyPrint=false', {
+                    method: 'POST', credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Goog-Visitor-Id': c.get('VISITOR_DATA') || '',
+                        'X-Youtube-Client-Name': String(c.get('INNERTUBE_CONTEXT_CLIENT_NAME') || 1),
+                        'X-Youtube-Client-Version': c.get('INNERTUBE_CONTEXT_CLIENT_VERSION') || '',
+                        'X-Goog-AuthUser': authUser,
+                        'X-Origin': location.origin,
+                        'Authorization': authorization,
+                    },
+                    body: JSON.stringify(body),
+                });
+                if (!r.ok) throw new Error('player ' + r.status);
+                return await r.text();
+                """, ["id": videoId, "sts": sts ?? 0,
+                      "authorization": auth.authorization(origin: "https://www.youtube.com") ?? "",
+                      "authUser": String(auth.authUser)]) as? String
+            if let text, !text.isEmpty { return text.data(using: .utf8) }
+        } catch {
+            lastPlayerError = error.localizedDescription
+        }
+        // Second try: the watch page's embedded player response.
+        do {
+            let text = try await run("Watch page", webView, """
+                const r = await fetch('/watch?v=' + encodeURIComponent(id) + '&bpctr=9999999999&has_verified=1',
+                                      { credentials: 'include' });
+                if (!r.ok) throw new Error('watch page ' + r.status);
+                const html = await r.text();
+                const key = 'ytInitialPlayerResponse';
+                let i = html.indexOf(key + ' = ');
+                if (i < 0) i = html.indexOf(key + '=');
+                if (i < 0) throw new Error('no ' + key + ' in ' + html.length + ' bytes');
+                i = html.indexOf('{', i);
+                let depth = 0, inStr = false, esc = false;
+                for (let j = i; j < html.length; j++) {
+                    const ch = html[j];
+                    if (inStr) {
+                        if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false;
+                    } else if (ch === '"') inStr = true;
+                    else if (ch === '{') depth++;
+                    else if (ch === '}') { depth--; if (depth === 0) return html.slice(i, j + 1); }
+                }
+                throw new Error('unterminated player response');
+                """, ["id": videoId]) as? String
+            if let text { return text.data(using: .utf8) }
+        } catch {
+            lastPlayerError = [lastPlayerError, error.localizedDescription].compactMap { $0 }.joined(separator: "; ")
+        }
+        return nil
     }
 
     func reset() {
