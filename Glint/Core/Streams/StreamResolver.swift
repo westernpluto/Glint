@@ -104,7 +104,7 @@ final class StreamResolver: @unchecked Sendable {
     /// streams without the account (as before signing in) and use the account only for the
     /// watch-history reports. Until the app restarts.
     /// Remembered across launches (only matters while signed in).
-    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams.v5")
+    private var _anonymousStreams = UserDefaults.standard.bool(forKey: "anonymousStreams.v6")
     var anonymousStreams: Bool { cacheLock.withLock { _anonymousStreams } }
     func useAnonymousStreams(because reason: String = "Stream protection refuses the account's token") {
         let changed: Bool = cacheLock.withLock {
@@ -112,7 +112,7 @@ final class StreamResolver: @unchecked Sendable {
             if !_anonymousStreams { cache = [:] }   // links resolved with the account
             return !_anonymousStreams
         }
-        UserDefaults.standard.set(true, forKey: "anonymousStreams.v5")
+        UserDefaults.standard.set(true, forKey: "anonymousStreams.v6")
         if changed { trace?("\(reason): streaming without the account (history still syncs)") }
     }
     private let penaltyLifetime: TimeInterval = 60 * 60
@@ -217,7 +217,7 @@ final class StreamResolver: @unchecked Sendable {
                 // A token bound to the video, sent with the request like the website does (it's
                 // what YouTube looks at before asking "are you a bot?"); minted while the player
                 // script loads.
-                let visitorData = await tube.streamVisitorData(signedIn: signedIn)
+                let visitorData = tube.visitorData
                 async let token = Self.videoToken(videoId, visitorData: visitorData)
                 do { webPlayer = try await JSChallengeSolver.shared.player(session: tube.session) } catch {
                     trace?("\(client.key): player script unavailable (\(error.localizedDescription))")
@@ -260,7 +260,7 @@ final class StreamResolver: @unchecked Sendable {
                     // back to the account's streams.
                     trace?("Without the account: \(error.localizedDescription) → back to streaming with it")
                     cacheLock.withLock { _anonymousStreams = false }
-                    UserDefaults.standard.set(false, forKey: "anonymousStreams.v5")
+                    UserDefaults.standard.set(false, forKey: "anonymousStreams.v6")
                 }
             }
             guard var stream = built else {
@@ -367,14 +367,19 @@ final class StreamResolver: @unchecked Sendable {
         var session: SabrSession!
         for (attempt, token) in (tokens.isEmpty ? [nil] : tokens.map(Optional.some)).enumerated() {
             let videoId = details.id
-            let visitorData = tube.isSignedIn && !anonymousStreams ? (tube.accountVisitorData ?? tube.visitorData) : tube.visitorData
+            let visitorData = tube.visitorData
             var config = SabrConfig(videoId: videoId, url: url, ustreamerConfig: ustreamer,
                                     clientNameId: client.clientId, clientVersion: client.clientVersion,
                                     poToken: token.flatMap(Self.base64URLData),
                                     userAgent: client.userAgent)
             if client.isWebPlayback {
+                // Stream protection asking again: a fresh token, alternating between the
+                // binding the first one had and the video id (googlevideo's choice).
+                let binding = sd[Self.sabrBindingKey].string ?? videoId
+                let counter = MintCounter()
                 config.mintToken = {
-                    let t = try? await PoTokenProvider.shared.token(for: videoId, visitorData: visitorData, fresh: true)
+                    let b = counter.next() % 2 == 0 ? binding : videoId
+                    let t = try? await PoTokenProvider.shared.token(for: b, visitorData: visitorData, fresh: true)
                     return t.flatMap(Self.base64URLData)
                 }
             }
@@ -504,7 +509,7 @@ final class StreamResolver: @unchecked Sendable {
     /// the answer is used).
     private func accountTracking(_ videoId: String) async -> PlaybackTracking? {
         let sts = try? await JSChallengeSolver.shared.player(session: tube.session).sts
-        let token = try? await Self.videoToken(videoId, visitorData: tube.accountVisitorData ?? tube.visitorData).get()
+        let token = try? await Self.videoToken(videoId, visitorData: tube.visitorData).get()
         guard let json = try? await player(videoId: videoId, client: .mweb, sts: sts, poToken: token, authenticated: true)
         else { return nil }
         let t = PlaybackTracking(json)
@@ -727,25 +732,20 @@ final class StreamResolver: @unchecked Sendable {
         }
 
         var pot: String?
-        // Signed in: minted for the account's visitor id, the one its requests carry.
-        let visitorData = accountBound ? (tube.accountVisitorData ?? tube.visitorData) : tube.visitorData
-        // yt-dlp binds the stream token to the account's data sync id when signed in, to the
-        // visitor id otherwise.
-        // Signed in, it must be the account's (a visitor-bound token gets the first minute or
-        // so, then "stream protection" stops the stream), so fetch the id if this response
-        // didn't carry it.
-        var dataSyncId = accountBound ? json.at("responseContext.mainAppWebResponseContext.datasyncId").string : nil
-        if dataSyncId == nil, accountBound { dataSyncId = await tube.ensureDataSyncId() }
+        // As in the versions where signed-in SABR played: the account's data sync id when the
+        // player response carries it, otherwise the (anonymous) visitor id. Fetching the account
+        // id separately (1.17.7) and minting for the account's visitor (1.18.4) made stream
+        // protection hold every signed-in SABR stream at "pending".
+        let visitorData = tube.visitorData
+        let dataSyncId = accountBound ? json.at("responseContext.mainAppWebResponseContext.datasyncId").string : nil
         let bindingKind = dataSyncId != nil ? "account" : "visitor"
-        if let binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:)) {
+        let binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:))
+        if let binding {
             do {
                 pot = try await PoTokenProvider.shared.token(for: binding, visitorData: visitorData)
             } catch {
                 trace?("\(client.key): PO token failed (\(error.localizedDescription))")
             }
-        }
-        if accountBound, dataSyncId == nil {
-            trace?("\(client.key): signed in but no account id for the stream token (using the visitor id)")
         }
         trace?("\(client.key): player \(player.id), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(pot == nil ? "none" : "ok (\(bindingKind))")")
 
@@ -789,6 +789,7 @@ final class StreamResolver: @unchecked Sendable {
             // SABR (YouTube's own protocol): the link with n solved, and the token it sends.
             sd[Self.sabrURLKey] = .string(sabrN.flatMap { n in solutions.n[n].map { Self.settingQuery(sabr, "n", $0) } } ?? sabr)
             if let pot { sd[Self.sabrTokenKey] = .string(pot) }
+            if let binding { sd[Self.sabrBindingKey] = .string(binding) }
             // If stream protection refuses that one: a token bound to the video (some sessions
             // are in YouTube's video-bound experiment, as with HLS above).
             if let videoToken, videoToken != pot { sd[Self.sabrVideoTokenKey] = .string(videoToken) }
@@ -801,6 +802,7 @@ final class StreamResolver: @unchecked Sendable {
     private static let sabrURLKey = "glintSabrUrl"
     private static let sabrTokenKey = "glintSabrPoToken"
     private static let sabrVideoTokenKey = "glintSabrVideoPoToken"
+    private static let sabrBindingKey = "glintSabrTokenBinding"
 
     /// The n challenge in an HLS manifest URL's path (`…/n/<challenge>/…`).
     private static func manifestN(_ url: String) -> String? {
@@ -876,4 +878,11 @@ final class StreamResolver: @unchecked Sendable {
             publishDate: microformat["publishDate"].string
         )
     }
+}
+
+/// Counts re-mints for one SABR session (alternates token bindings).
+private final class MintCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func next() -> Int { lock.withLock { defer { n += 1 }; return n } }
 }

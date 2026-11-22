@@ -41,36 +41,13 @@ final class InnerTube: @unchecked Sendable {
 
     var auth: AuthContext? {
         get { lock.lock(); defer { lock.unlock() }; return _auth }
-        set { lock.lock(); _auth = newValue; _dataSyncId = nil; _accountVisitorData = nil; lock.unlock() }
-    }
-
-    /// The signed-in session's visitor id (from signed-in responses).
-    private var _accountVisitorData: String?
-    var accountVisitorData: String? { lock.withLock { _accountVisitorData } }
-
-    /// The visitor id to mint stream tokens for and send with signed-in requests: the
-    /// account's when signed in (fetched with one light request if needed), else the anonymous one.
-    func streamVisitorData(signedIn: Bool) async -> String? {
-        guard signedIn, isSignedIn else { return visitorData }
-        if accountVisitorData == nil { _ = await ensureDataSyncId() }
-        if accountVisitorData == nil { _ = try? await call("account/account_menu", client: .web, body: [:]) }
-        return accountVisitorData ?? visitorData
+        set { lock.lock(); _auth = newValue; _dataSyncId = nil; lock.unlock() }
     }
 
     /// The signed-in account's data sync id (`responseContext.mainAppWebResponseContext.datasyncId`),
-    /// from any signed-in response. Signed in, stream tokens must be bound to it.
+    /// from any signed-in response (diagnostics; the stream token uses the player response's).
     private var _dataSyncId: String?
     var dataSyncId: String? { lock.withLock { _dataSyncId } }
-
-    /// The data sync id, asking for it (one light signed-in request) if no response carried it yet.
-    func ensureDataSyncId() async -> String? {
-        if let id = dataSyncId { return id }
-        guard isSignedIn else { return nil }
-        _ = try? await call("account/account_menu", client: .web, body: [:])
-        if let id = dataSyncId { return id }
-        _ = try? await call("browse", client: .web, body: ["browseId": "FEwhat_to_watch"])
-        return dataSyncId
-    }
 
     var visitorData: String? {
         get { lock.lock(); defer { lock.unlock() }; return _visitorData }
@@ -95,9 +72,7 @@ final class InnerTube: @unchecked Sendable {
         // Cookie auth only works for the browser clients.
         let browserClient = client.clientName.hasPrefix("WEB") || client.clientName == "MWEB"
         let usedAuth = (authenticated && browserClient) ? auth : nil
-        // Signed in: the account's own visitor id (the one its cookies belong to), not the
-        // anonymous one; a mismatch leaves YouTube's stream protection "pending" forever.
-        let visitor = usedAuth?.isValid == true ? (accountVisitorData ?? visitorData) : visitorData
+        let visitor = visitorData
 
         var payload = body
         payload["context"] = client.context(visitorData: visitor, hl: hl, gl: gl)
@@ -130,9 +105,6 @@ final class InnerTube: @unchecked Sendable {
         }
         if let used = usedAuth, let id = json.at("responseContext.mainAppWebResponseContext.datasyncId").string, !id.isEmpty {
             lock.withLock { if _auth == used { _dataSyncId = id } }
-        }
-        if let used = usedAuth, used.isValid, let v = json.at("responseContext.visitorData").string, !v.isEmpty {
-            lock.withLock { if _auth == used, _accountVisitorData == nil { _accountVisitorData = v } }
         }
         return json
     }
