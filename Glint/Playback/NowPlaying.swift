@@ -66,7 +66,8 @@ final class NowPlaying {
             MPNowPlayingInfoPropertyPlaybackRate: c.isPlaying ? Double(c.rate) : 0.0,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
             MPNowPlayingInfoPropertyIsLiveStream: c.stream?.isLive ?? false,
-            MPNowPlayingInfoPropertyMediaType: c.audioOnly ? MPNowPlayingInfoMediaType.audio.rawValue : MPNowPlayingInfoMediaType.video.rawValue,
+            // Songs are audio to the system (square cover on the lock screen), even played as video.
+            MPNowPlayingInfoPropertyMediaType: (c.audioOnly || item.isMusic) ? MPNowPlayingInfoMediaType.audio.rawValue : MPNowPlayingInfoMediaType.video.rawValue,
         ]
         if let artwork, artworkURL == item.thumbnail { info[MPMediaItemPropertyArtwork] = artwork }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
@@ -83,8 +84,12 @@ final class NowPlaying {
         artworkURL = url
         artwork = nil
         Task {
-            // Same cache as the on-screen thumbnail: usually already decoded.
-            guard let image = await ImagePipeline.shared.image(url) else { return }
+            // The same picture Now Playing shows (the large cover; the original if that's missing),
+            // from the same cache, so it's usually already decoded.
+            var image: UIImage?
+            if let sharp = Artwork.sharp(url, size: 1200), sharp != url { image = await ImagePipeline.shared.image(sharp) }
+            if image == nil { image = await ImagePipeline.shared.image(url) }
+            guard let image else { return }
             guard self.artworkURL == url else { return }
             self.artwork = Self.makeArtwork(image)
             self.update()

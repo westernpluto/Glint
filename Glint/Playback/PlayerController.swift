@@ -367,6 +367,7 @@ final class PlayerController {
                 }
                 self.queue = [now] + queued + extra
                 self.index = 0
+                self.nowPlaying.update()   // the album cover, on the lock screen right away
             }
         }
     }
