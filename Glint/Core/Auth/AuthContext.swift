@@ -33,6 +33,12 @@ struct AuthContext: Hashable {
         return parts.joined(separator: "; ")
     }
 
+    /// Who is signed in (the session id and the selected account), unchanged when the
+    /// server only refreshes other cookies.
+    var identity: String {
+        "\(value("SAPISID") ?? value("__Secure-3PAPISID") ?? "")#\(authUser)#\(pageId ?? "")"
+    }
+
     private func value(_ name: String) -> String? {
         cookies.first { $0.name == name && ($0.domain.contains("youtube.com")) }?.value
             ?? cookies.first { $0.name == name }?.value

@@ -326,20 +326,13 @@ actor SabrSession {
         for _ in 0..<4 {   // redirects
             let redirected = try await requestOnce(atMs: playerTimeMs)
             if redirected { continue }
-            // Experiment: the very first answer is often "nothing yet, wait ~4 s". Ask once
-            // more straight away; if that brings media the start is seconds faster, and if
-            // not the wait is honoured as before.
-            if !triedSkippingFirstBackoff, recording, !lastAnswerHadMedia, backoffUntil > Date() {
-                triedSkippingFirstBackoff = true
-                if recording { startupLog.append("asking again without waiting") }
-                _ = try await requestOnce(atMs: playerTimeMs)
-            }
+            // (The first answer's "wait ~4 s" can't be skipped: asking again straight away just
+            // gets the rest of the same countdown.)
             return
         }
         throw SabrFailure.server("too many redirects")
     }
 
-    private var triedSkippingFirstBackoff = false
 
     /// One POST, processed as it streams in. Returns true when the server redirected.
     private func requestOnce(atMs playerTimeMs: Double) async throws -> Bool {

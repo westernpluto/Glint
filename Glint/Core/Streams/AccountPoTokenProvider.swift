@@ -31,7 +31,9 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
     private var webView: WKWebView?
     private var pageLoaded: CheckedContinuation<Void, Error>?
     private var session: Session?
-    private var account: AuthContext?
+    /// Who the page is signed in as (`AuthContext.identity`): cookie refreshes (including the
+    /// ones copied back from the page) don't count as a different account.
+    private var account: String?
     private var minterExpiry = Date.distantPast
     private var building: Task<Session, Error>?
     private var tokens: [String: (token: String, expires: Date)] = [:]
@@ -98,7 +100,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
     /// The signed-in page's session (building the page and minter if needed), or nil.
     func currentSession() async -> Session? {
         guard let auth = InnerTube.shared.auth, auth.isValid else { return nil }
-        if let session, account == auth, minterExpiry > Date(), webView != nil { return session }
+        if let session, account == auth.identity, minterExpiry > Date(), webView != nil { return session }
         if Date().timeIntervalSince(failedAt) < 10 * 60 { return nil }
         if let building { return try? await building.value }
         let task = Task { try await self.build(auth) }
@@ -341,7 +343,7 @@ final class AccountPoTokenProvider: NSObject, WKNavigationDelegate {
         await syncCookiesBack()
         let s = Session(visitorData: visitor, dataSyncId: datasync, clientVersion: info["version"] as? String)
         session = s
-        account = auth
+        account = auth.identity
         lastError = nil
         return s
     }
