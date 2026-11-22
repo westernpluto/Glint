@@ -718,6 +718,16 @@ final class PlayerController {
             note("SABR \(file): \(text)")
         }
         let now = Date()
+        // Signed in, stream protection refused the account's token (it plays the first part,
+        // then stops): carry on from here with streams fetched without the account.
+        if text.contains("stream protection"), InnerTube.shared.isSignedIn, !StreamResolver.shared.anonymousStreams,
+           now.timeIntervalSince(lastSabrRescue) > 20 {
+            StreamResolver.shared.useAnonymousStreams()
+            lastSabrRescue = now
+            sabrFailureTimes = []
+            refresh(at: currentTime)
+            return
+        }
         sabrFailureTimes = sabrFailureTimes.filter { now.timeIntervalSince($0) < 20 } + [now]
         // Stuck on them, and the last rescue (if any) had time to work.
         guard isBuffering, sabrFailureTimes.count >= 6,

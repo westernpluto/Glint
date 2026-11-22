@@ -100,6 +100,19 @@ final class StreamResolver: @unchecked Sendable {
 
     /// Clients whose streams recently failed during playback, and when. They are tried last.
     private var penalized: [String: Date] = [:]
+    /// Signed in, YouTube's stream protection kept refusing the account-bound token: fetch
+    /// streams without the account (as before signing in) and use the account only for the
+    /// watch-history reports. Until the app restarts.
+    private var _anonymousStreams = false
+    var anonymousStreams: Bool { cacheLock.withLock { _anonymousStreams } }
+    func useAnonymousStreams() {
+        let changed: Bool = cacheLock.withLock {
+            defer { _anonymousStreams = true }
+            if !_anonymousStreams { cache = [:] }   // links resolved with the account
+            return !_anonymousStreams
+        }
+        if changed { trace?("Stream protection refuses the account's token: streaming without the account (history still syncs)") }
+    }
     private let penaltyLifetime: TimeInterval = 60 * 60
 
     /// Called when a stream stopped working mid-playback: that client goes to the back of
@@ -178,7 +191,10 @@ final class StreamResolver: @unchecked Sendable {
         var progressive: ResolvedStream?
         var refusals = 0, botChecks = 0
         var answeredWithoutLinks = false
-        let signedIn = tube.isSignedIn
+        let accountSignedIn = tube.isSignedIn
+        let anonymous = accountSignedIn && anonymousStreams
+        // Whether the stream requests carry the account.
+        let signedIn = accountSignedIn && !anonymous
         var order = orderedClients
         if signedIn {
             // Signed in, the web clients carry the account (yt-dlp's choice with cookies):
@@ -222,8 +238,22 @@ final class StreamResolver: @unchecked Sendable {
                 trace?("\(client.key)\(client.isWebPlayback && signedIn ? " (signed in)" : ""): \(json.at("playabilityStatus.status").string ?? "?") \(reason ?? "")")
                 continue
             }
-            if let webPlayer { json = await prepareWebFormats(json, client: client, player: webPlayer, videoToken: playerToken) }
+            if let webPlayer {
+                json = await prepareWebFormats(json, client: client, player: webPlayer, videoToken: playerToken,
+                                               accountBound: signedIn && client.isWebPlayback)
+            }
             guard var stream = await build(json, client: client, hints: hints) else {
+                // Stream protection just refused the account's token: start over without it.
+                if signedIn, anonymousStreams {
+                    do {
+                        return try await resolveFresh(videoId: videoId, hints: hints, isRetry: isRetry)
+                    } catch {
+                        // Without the account it doesn't play at all (bot check, sign-in only…):
+                        // back to the account's streams.
+                        trace?("Without the account: \(error.localizedDescription) → back to streaming with it")
+                        cacheLock.withLock { _anonymousStreams = false }
+                    }
+                }
                 if client.isWebPlayback { answeredWithoutLinks = true }
                 trace?("\(client.key): no usable formats")
                 continue
@@ -231,6 +261,12 @@ final class StreamResolver: @unchecked Sendable {
             stream.clientKey = client.key
             // Only a request that carried the account reports to it.
             if client.isWebPlayback, signedIn { stream.tracking = PlaybackTracking(json) }
+            if client.isWebPlayback, anonymous,
+               let authed = try? await player(videoId: videoId, client: client, sts: webPlayer?.sts,
+                                              poToken: playerToken, authenticated: true) {
+                // Streaming without the account; this signed-in response is only for history.
+                stream.tracking = PlaybackTracking(authed)
+            }
             if stream.sabr != nil {
                 if let p = progressive, let url = p.progressiveURL {
                     stream.progressiveURL = url
@@ -347,6 +383,7 @@ final class StreamResolver: @unchecked Sendable {
                     trace?("\(client.key): SABR refused the stream token; trying the video-bound one")
                     continue
                 }
+                if refused, tube.isSignedIn, !anonymousStreams { useAnonymousStreams() }
                 trace?("\(client.key): SABR failed (\(error.localizedDescription))")
                 return nil
             }
@@ -636,7 +673,7 @@ final class StreamResolver: @unchecked Sendable {
     /// a PO token bound to this visitor (as yt-dlp does), so the formats below are directly
     /// playable. Formats whose challenges couldn't be solved lose their link.
     private func prepareWebFormats(_ json: JSON, client: ClientProfile, player: JSChallengeSolver.Player,
-                                   videoToken: String?) async -> JSON {
+                                   videoToken: String?, accountBound: Bool) async -> JSON {
         let keys = ["adaptiveFormats", "formats"]
         let pending = keys.flatMap { json.at("streamingData.\($0)").array.compactMap(PendingLink.init) }
         let hls = json.at("streamingData.hlsManifestUrl").string
@@ -666,8 +703,8 @@ final class StreamResolver: @unchecked Sendable {
         // Signed in, it must be the account's (a visitor-bound token gets the first minute or
         // so, then "stream protection" stops the stream), so fetch the id if this response
         // didn't carry it.
-        var dataSyncId = json.at("responseContext.mainAppWebResponseContext.datasyncId").string
-        if dataSyncId == nil, tube.isSignedIn { dataSyncId = await tube.ensureDataSyncId() }
+        var dataSyncId = accountBound ? json.at("responseContext.mainAppWebResponseContext.datasyncId").string : nil
+        if dataSyncId == nil, accountBound { dataSyncId = await tube.ensureDataSyncId() }
         let bindingKind = dataSyncId != nil ? "account" : "visitor"
         if let binding = dataSyncId ?? visitorData.map(PoTokenProvider.contentBinding(visitorData:)) {
             do {
@@ -676,7 +713,7 @@ final class StreamResolver: @unchecked Sendable {
                 trace?("\(client.key): PO token failed (\(error.localizedDescription))")
             }
         }
-        if tube.isSignedIn, dataSyncId == nil {
+        if accountBound, dataSyncId == nil {
             trace?("\(client.key): signed in but no account id for the stream token (using the visitor id)")
         }
         trace?("\(client.key): player \(player.id), solved \(solutions.n.count) n / \(solutions.sig.count) sig, PO token \(pot == nil ? "none" : "ok (\(bindingKind))")")
