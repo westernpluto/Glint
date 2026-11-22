@@ -217,6 +217,9 @@ actor SabrSession {
     private var lastAnswerHadMedia = true
     /// Segment numbers the last answer carried, for diagnostics ("itag:first…last").
     private var lastAnswerNumbers = "none"
+    private var lastProtection: Int64 = 1
+    /// Noteworthy protocol events (stream protection changes) for Playback info.
+    nonisolated(unsafe) static var log: (@Sendable (String) -> Void)?
 
     /// How far past its start position the server says it sends per answer
     /// (NextRequestPolicy target readahead; ~15 s audio / ~25 s video seen).
@@ -395,6 +398,9 @@ actor SabrSession {
         var redirected = false
         var mediaCount = 0
         var answerNumbers: [Int: ClosedRange<Int>] = [:]
+        var partTypes: [Int] = []
+        var protection: Int64?
+        var backoff: Int64?
         for try await event in Self.streamer.stream(req) {
             let parts: [UMP.Part]
             switch event {
@@ -406,6 +412,7 @@ actor SabrSession {
                 parts = parser.feed(chunk)
             }
             for part in parts {
+                if ![20, 21, 22].contains(part.type), !partTypes.contains(part.type) { partTypes.append(part.type) }
                 switch part.type {
                 case 20:   // MEDIA_HEADER
                     let h = ProtoMessage(part.payload)
@@ -424,7 +431,7 @@ actor SabrSession {
                 case 35:   // NEXT_REQUEST_POLICY
                     let policy = ProtoMessage(part.payload)
                     if let c = policy.data(7) { cookie = c }
-                    if let ms = policy.int(4), ms > 0 { backoffUntil = Date().addingTimeInterval(Double(ms) / 1000) }
+                    if let ms = policy.int(4), ms > 0 { backoffUntil = Date().addingTimeInterval(Double(ms) / 1000); backoff = ms }
                     let target = audioOnly ? policy.int(1) : policy.int(2)
                     if let target, target > 2_000 { readaheadMs = Double(target) }
                 case 43:   // SABR_REDIRECT
@@ -451,6 +458,11 @@ actor SabrSession {
                 case 58:   // STREAM_PROTECTION_STATUS: 1 ok, 2 pending, 3 rejected
                     let sps = ProtoMessage(part.payload)
                     let status = sps.int(1) ?? 0
+                    protection = status
+                    if status != lastProtection {
+                        lastProtection = status
+                        Self.log?("SABR stream protection: \(["?", "ok", "pending", "rejected"][Int(min(max(status, 0), 3))]) (status \(status), rejects \(protectionRejects))")
+                    }
                     if let m = sps.int(2), m > 0 { protectionMaxRetries = Int(m) }
                     if status == 3 {
                         protectionRejects += 1
@@ -465,8 +477,13 @@ actor SabrSession {
         }
         if !redirected {
             lastAnswerHadMedia = mediaCount > 0
-            lastAnswerNumbers = answerNumbers.isEmpty ? "empty"
+            var desc = answerNumbers.isEmpty ? "empty"
                 : answerNumbers.map { "\($0.key):\($0.value.lowerBound)…\($0.value.upperBound)" }.sorted().joined(separator: " ")
+            desc += " [parts \(partTypes.map(String.init).joined(separator: ","))"
+            if let protection { desc += ", protection \(protection)" }
+            if let backoff { desc += ", back-off \(backoff) ms" }
+            desc += ", contexts \(contexts.keys.sorted().map(String.init).joined(separator: ",")) sent \(activeContexts.sorted().map(String.init).joined(separator: ","))]"
+            lastAnswerNumbers = desc
         }
         if let firstByte { SabrBandwidth.record(bytes: received, seconds: Date().timeIntervalSince(firstByte)) }
         return redirected && mediaCount == 0

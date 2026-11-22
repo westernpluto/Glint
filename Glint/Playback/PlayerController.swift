@@ -216,6 +216,7 @@ final class PlayerController {
             Task { @MainActor in PlayerController.shared.note(line) }
         }
         YouTubeWatchSync.shared.trace = { [weak self] line in self?.note(line) }
+        SabrSession.log = { line in Task { @MainActor in PlayerController.shared.note(line) } }
         SabrServer.shared.onError = { file, error in
             let text = error.localizedDescription
             Task { @MainActor in PlayerController.shared.sabrRequestFailed(file, text) }
@@ -732,7 +733,7 @@ final class PlayerController {
         // Signed in, segments that SABR never delivers (seen with songs): the streams fetched
         // without the account are direct links on this network, so switch to them.
         if text.contains("wasn't delivered"), InnerTube.shared.isSignedIn, !StreamResolver.shared.anonymousStreams,
-           sabrFailureTimes.count >= 2, now.timeIntervalSince(lastSabrRescue) > 20 {
+           now.timeIntervalSince(lastSabrRescue) > 20 {
             StreamResolver.shared.useAnonymousStreams(because: "SABR isn't delivering this stream")
             lastSabrRescue = now
             sabrFailureTimes = []
