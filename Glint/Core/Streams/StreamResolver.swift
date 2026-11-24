@@ -286,9 +286,19 @@ final class StreamResolver: @unchecked Sendable {
                 trace?("\(client.key) (signed-in page): player response as the website gets it (\(Int(Date().timeIntervalSince(asked) * 1000)) ms)")
             } else {
                 do {
-                    json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
-                                            poToken: playerToken, authenticated: client.isWebPlayback && signedIn,
-                                            visitorOverride: pageClient ? page?.visitorData : nil)
+                    do {
+                        json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
+                                                poToken: playerToken, authenticated: client.isWebPlayback && signedIn,
+                                                visitorOverride: pageClient ? page?.visitorData : nil)
+                    } catch let e as URLError where [.timedOut, .networkConnectionLost, .cannotConnectToHost, .secureConnectionFailed].contains(e.code) {
+                        // A dead connection (typically after the app was in the background):
+                        // once more on a fresh one before falling back to slower clients.
+                        trace?("\(client.key): \(e.localizedDescription) — retrying on a fresh connection")
+                        await withCheckedContinuation { c in tube.session.flush { c.resume() } }
+                        json = try await player(videoId: videoId, client: client, sts: webPlayer?.sts,
+                                                poToken: playerToken, authenticated: client.isWebPlayback && signedIn,
+                                                visitorOverride: pageClient ? page?.visitorData : nil)
+                    }
                 } catch {
                     trace?("\(client.key): request failed (\(error.localizedDescription))")
                     continue

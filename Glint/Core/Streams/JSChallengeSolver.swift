@@ -125,11 +125,26 @@ final class JSChallengeSolver: @unchecked Sendable {
     func solve(n: [String], sig: [String], player: Player) async throws -> Solutions {
         let n = Array(Set(n)), sig = Array(Set(sig))
         if n.isEmpty && sig.isEmpty { return Solutions() }
+        // Capped: a player the solver can't handle (or a first parse of a new one stuck
+        // behind other work) must not hold playback for minutes; the caller falls back.
+        // Whichever comes first answers (the JavaScript run itself can't be interrupted).
         return try await withCheckedThrowingContinuation { cont in
+            let once = Once()
             queue.async {
-                cont.resume(with: Result { try self.solveOnQueue(n: n, sig: sig, player: player) })
+                let r = Result { try self.solveOnQueue(n: n, sig: sig, player: player) }
+                if once.claim() { cont.resume(with: r) }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 12) {
+                if once.claim() { cont.resume(throwing: SolverError.script("timed out")) }
             }
         }
+    }
+
+    /// True for the first caller only.
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        func claim() -> Bool { lock.withLock { defer { done = true }; return !done } }
     }
 
     private func solveOnQueue(n: [String], sig: [String], player: Player) throws -> Solutions {

@@ -1175,7 +1175,10 @@ final class PlayerController {
 
     func detach(_ layer: AVPlayerLayer) { layers.remove(layer) }
 
+    private var backgroundedAt: Date?
+
     private func enteredBackground() {
+        backgroundedAt = Date()
         savePosition(force: true)
         // Leave the layer alone while Picture in Picture is running or about to start automatically.
         let pipStarting = pip.map { $0.isPictureInPictureActive || ($0.canStartPictureInPictureAutomaticallyFromInline && $0.isPictureInPicturePossible && isPlaying) } ?? false
@@ -1191,5 +1194,14 @@ final class PlayerController {
     private func enteringForeground() {
         for l in layers.allObjects { l.player = player }
         SabrServer.shared.ensureRunning()
+        // After a while in the background the open connections are often dead, and the next
+        // request on one hangs until it times out (a resumed video took over a minute to
+        // come back): start every session on fresh connections.
+        if let at = backgroundedAt, Date().timeIntervalSince(at) > 120 {
+            InnerTube.shared.session.flush {}
+            URLSession.shared.flush {}
+            SabrSession.resetConnections()
+        }
+        backgroundedAt = nil
     }
 }

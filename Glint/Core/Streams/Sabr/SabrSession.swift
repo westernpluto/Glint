@@ -92,6 +92,8 @@ actor SabrSession {
     private var waiters: [Waiter] = []
 
     private static let streamer = SabrStreamer()
+    /// Fresh connections for the next requests (after the app was in the background).
+    nonisolated static func resetConnections() { streamer.flush() }
 
     init(config: SabrConfig, audio: DashFormat, videos: [DashFormat]) {
         self.config = config
@@ -617,6 +619,8 @@ final class SabrStreamer: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         cfg.timeoutIntervalForRequest = 30
         return URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
     }()
+
+    func flush() { session.flush {} }
 
     func stream(_ request: URLRequest) -> AsyncThrowingStream<Event, Error> {
         let task = session.dataTask(with: request)
